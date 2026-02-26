@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vibetube"
+version = "0.1.0"
+description = "CLI-first local PNGtuber rendering pipeline"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "VibeTube Contributors" }]
+dependencies = [
+  "requests>=2.31.0",
+  "Pillow>=10.0.0"
+]
+
+[project.optional-dependencies]
+pytoon = ["pytoon"]
+
+dev = [
+  "pytest>=8.0.0"
+]
+
+[project.scripts]
+vibetube = "cli.main:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
