@@ -4,7 +4,7 @@ FastAPI application for VibeTube backend.
 Handles voice cloning, generation history, and server mode.
 """
 
-from fastapi import FastAPI, Depends, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, Depends, UploadFile, File, Form, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -22,7 +22,10 @@ import uuid
 import asyncio
 import signal
 import os
+import shutil
+import json
 from urllib.parse import quote
+from PIL import Image, ExifTags
 
 
 def _safe_content_disposition(disposition_type: str, filename: str) -> str:
@@ -57,11 +60,73 @@ app = FastAPI(
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
-    allow_credentials=True,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+_VIBETUBE_AVATAR_STATES = {"idle", "talk", "idle_blink", "talk_blink"}
+
+
+def _vibetube_avatar_pack_dir(profile_id: str) -> Path:
+    return config.get_profiles_dir() / profile_id / "vibetube_avatar"
+
+
+def _build_vibetube_avatar_pack_response(profile_id: str) -> models.VibeTubeAvatarPackResponse:
+    pack_dir = _vibetube_avatar_pack_dir(profile_id)
+
+    def _state_url(state: str) -> Optional[str]:
+        file_path = pack_dir / f"{state}.png"
+        if not file_path.exists():
+            return None
+        return f"/profiles/{profile_id}/vibetube-avatar-pack/{state}"
+
+    idle_url = _state_url("idle")
+    talk_url = _state_url("talk")
+    idle_blink_url = _state_url("idle_blink")
+    talk_blink_url = _state_url("talk_blink")
+
+    return models.VibeTubeAvatarPackResponse(
+        profile_id=profile_id,
+        idle_url=idle_url,
+        talk_url=talk_url,
+        idle_blink_url=idle_blink_url,
+        talk_blink_url=talk_blink_url,
+        complete=bool(idle_url and talk_url and idle_blink_url and talk_blink_url),
+    )
+
+
+def _save_vibetube_state_png(input_path: Path, output_path: Path, max_size: int = 512) -> None:
+    """Process and save VibeTube avatar state while preserving transparency."""
+    with Image.open(input_path) as img:
+        try:
+            orientation_tag = None
+            for tag, name in ExifTags.TAGS.items():
+                if name == "Orientation":
+                    orientation_tag = tag
+                    break
+            if orientation_tag is not None and hasattr(img, "_getexif"):
+                exif = img._getexif()
+                if exif:
+                    orientation = exif.get(orientation_tag)
+                    if orientation == 3:
+                        img = img.rotate(180, expand=True)
+                    elif orientation == 6:
+                        img = img.rotate(270, expand=True)
+                    elif orientation == 8:
+                        img = img.rotate(90, expand=True)
+        except Exception:
+            pass
+
+        # Keep alpha channel for VibeTube states; convert non-alpha sources to RGBA.
+        img = img.convert("RGBA")
+        img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        img.save(output_path, format="PNG", optimize=True)
 
 
 # ============================================
@@ -420,6 +485,93 @@ async def delete_profile_avatar(
     return {"message": "Avatar deleted successfully"}
 
 
+@app.post("/profiles/{profile_id}/vibetube-avatar-pack", response_model=models.VibeTubeAvatarPackResponse)
+async def save_vibetube_avatar_pack(
+    profile_id: str,
+    idle: UploadFile = File(...),
+    talk: UploadFile = File(...),
+    idle_blink: UploadFile = File(...),
+    talk_blink: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    """Save a 4-state VibeTube avatar pack linked to a voice profile."""
+    profile = db.query(DBVoiceProfile).filter_by(id=profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    uploads = {
+        "idle": idle,
+        "talk": talk,
+        "idle_blink": idle_blink,
+        "talk_blink": talk_blink,
+    }
+
+    pack_dir = _vibetube_avatar_pack_dir(profile_id)
+    pack_dir.mkdir(parents=True, exist_ok=True)
+
+    for state_name, upload in uploads.items():
+        suffix = Path(upload.filename or "").suffix.lower()
+        if suffix not in {".png", ".webp", ".jpg", ".jpeg"}:
+            suffix = ".png"
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            data = await upload.read()
+            tmp.write(data)
+            tmp_path = Path(tmp.name)
+
+        try:
+            is_valid, error_msg = profiles.validate_image(str(tmp_path))
+            if not is_valid:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid {state_name} image: {error_msg}",
+                )
+
+            out_path = pack_dir / f"{state_name}.png"
+            _save_vibetube_state_png(tmp_path, out_path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+    profile.updated_at = datetime.utcnow()
+    db.commit()
+
+    return _build_vibetube_avatar_pack_response(profile_id)
+
+
+@app.get("/profiles/{profile_id}/vibetube-avatar-pack", response_model=models.VibeTubeAvatarPackResponse)
+async def get_vibetube_avatar_pack(
+    profile_id: str,
+    db: Session = Depends(get_db),
+):
+    """Get metadata for a saved VibeTube avatar pack."""
+    profile = db.query(DBVoiceProfile).filter_by(id=profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    return _build_vibetube_avatar_pack_response(profile_id)
+
+
+@app.get("/profiles/{profile_id}/vibetube-avatar-pack/{state}")
+async def get_vibetube_avatar_pack_state(
+    profile_id: str,
+    state: str,
+    db: Session = Depends(get_db),
+):
+    """Serve a saved VibeTube avatar state image file."""
+    if state not in _VIBETUBE_AVATAR_STATES:
+        raise HTTPException(status_code=404, detail="Invalid state")
+
+    profile = db.query(DBVoiceProfile).filter_by(id=profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    file_path = _vibetube_avatar_pack_dir(profile_id) / f"{state}.png"
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Avatar state not found")
+
+    return FileResponse(file_path)
+
+
 @app.get("/profiles/{profile_id}/export")
 async def export_profile(
     profile_id: str,
@@ -752,8 +904,14 @@ async def vibetube_render(
     off_threshold: float = Form(0.02),
     smoothing_windows: int = Form(3),
     min_hold_windows: int = Form(1),
-    idle: UploadFile = File(...),
-    talk: UploadFile = File(...),
+    blink_min_interval_sec: float = Form(3.5),
+    blink_max_interval_sec: float = Form(5.5),
+    blink_duration_frames: int = Form(3),
+    head_motion_amount_px: float = Form(3.0),
+    head_motion_change_sec: float = Form(2.8),
+    head_motion_smoothness: float = Form(0.04),
+    idle: Optional[UploadFile] = File(None),
+    talk: Optional[UploadFile] = File(None),
     idle_blink: Optional[UploadFile] = File(None),
     talk_blink: Optional[UploadFile] = File(None),
     blink: Optional[UploadFile] = File(None),
@@ -770,6 +928,7 @@ async def vibetube_render(
             audio_path = Path(generation.audio_path)
             source_text = generation.text
             source_generation_id = generation.id
+            avatar_profile_id = generation.profile_id
         else:
             if not profile_id or not text:
                 raise HTTPException(
@@ -787,6 +946,10 @@ async def vibetube_render(
             audio_path = Path(gen.audio_path)
             source_text = gen.text
             source_generation_id = gen.id
+            avatar_profile_id = profile_id
+
+        if profile_id:
+            avatar_profile_id = profile_id
 
         if not audio_path.exists():
             raise HTTPException(status_code=404, detail="Source audio file not found")
@@ -800,14 +963,34 @@ async def vibetube_render(
             data = await upload.read()
             target.write_bytes(data)
 
-        await save_upload(idle, avatar_dir / "idle.png")
-        await save_upload(talk, avatar_dir / "talk.png")
-        if idle_blink:
-            await save_upload(idle_blink, avatar_dir / "idle_blink.png")
-        if talk_blink:
-            await save_upload(talk_blink, avatar_dir / "talk_blink.png")
-        if blink:
-            await save_upload(blink, avatar_dir / "blink.png")
+        if idle and talk:
+            await save_upload(idle, avatar_dir / "idle.png")
+            await save_upload(talk, avatar_dir / "talk.png")
+            if idle_blink:
+                await save_upload(idle_blink, avatar_dir / "idle_blink.png")
+            if talk_blink:
+                await save_upload(talk_blink, avatar_dir / "talk_blink.png")
+            if blink:
+                await save_upload(blink, avatar_dir / "blink.png")
+        else:
+            pack_dir = _vibetube_avatar_pack_dir(avatar_profile_id)
+            if not (pack_dir / "idle.png").exists() or not (pack_dir / "talk.png").exists():
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Avatar images are missing. Upload idle/talk images, "
+                        "or save a VibeTube avatar pack for this voice profile first."
+                    ),
+                )
+
+            shutil.copy2(pack_dir / "idle.png", avatar_dir / "idle.png")
+            shutil.copy2(pack_dir / "talk.png", avatar_dir / "talk.png")
+            if (pack_dir / "idle_blink.png").exists():
+                shutil.copy2(pack_dir / "idle_blink.png", avatar_dir / "idle_blink.png")
+            if (pack_dir / "talk_blink.png").exists():
+                shutil.copy2(pack_dir / "talk_blink.png", avatar_dir / "talk_blink.png")
+            if (pack_dir / "blink.png").exists():
+                shutil.copy2(pack_dir / "blink.png", avatar_dir / "blink.png")
 
         render_result = vibetube.render_overlay(
             audio_path=audio_path,
@@ -820,16 +1003,22 @@ async def vibetube_render(
             off_threshold=off_threshold,
             smoothing_windows=smoothing_windows,
             min_hold_windows=min_hold_windows,
+            blink_min_interval_sec=blink_min_interval_sec,
+            blink_max_interval_sec=blink_max_interval_sec,
+            blink_duration_frames=blink_duration_frames,
+            head_motion_amount_px=head_motion_amount_px,
+            head_motion_change_sec=head_motion_change_sec,
+            head_motion_smoothness=head_motion_smoothness,
             text=source_text,
         )
 
         return models.VibeTubeRenderResponse(
             job_id=job_id,
-            output_dir=str(base_out),
-            video_path=render_result["video_path"],
-            timeline_path=render_result["timeline_path"],
-            captions_path=render_result["captions_path"],
-            meta_path=render_result["meta_path"],
+            output_dir=str(base_out.resolve()),
+            video_path=str(Path(render_result["video_path"]).resolve()),
+            timeline_path=str(Path(render_result["timeline_path"]).resolve()),
+            captions_path=str(Path(render_result["captions_path"]).resolve()) if render_result["captions_path"] else None,
+            meta_path=str(Path(render_result["meta_path"]).resolve()),
             duration=float(render_result["duration_sec"]),
             source_generation_id=source_generation_id,
         )
@@ -841,6 +1030,91 @@ async def vibetube_render(
         raise HTTPException(status_code=500, detail=f"VibeTube render failed: {str(e)}")
 
 
+@app.get("/vibetube/jobs/{job_id}/video")
+async def vibetube_job_video(job_id: str):
+    """Serve rendered WebM video for in-app preview."""
+    video_path = config.get_data_dir() / "vibetube" / job_id / "avatar.webm"
+    if not video_path.exists():
+        raise HTTPException(status_code=404, detail="Rendered video not found")
+    return FileResponse(video_path, media_type="video/webm")
+
+
+@app.get("/vibetube/jobs/{job_id}/export-mp4")
+async def vibetube_export_mp4(job_id: str):
+    """Export rendered job as MP4 and return as downloadable file."""
+    base_out = config.get_data_dir() / "vibetube" / job_id
+    webm_path = base_out / "avatar.webm"
+    mp4_path = base_out / "avatar.mp4"
+
+    if not webm_path.exists():
+        raise HTTPException(status_code=404, detail="Rendered video not found")
+
+    try:
+        vibetube.export_mp4(webm_path=webm_path, mp4_path=mp4_path)
+    except vibetube.VibeTubeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"MP4 export failed: {str(e)}")
+
+    return FileResponse(
+        mp4_path,
+        media_type="video/mp4",
+        filename=f"vibetube-{job_id}.mp4",
+    )
+
+
+@app.get("/vibetube/jobs", response_model=List[models.VibeTubeJobResponse])
+async def list_vibetube_jobs():
+    """List all rendered VibeTube jobs."""
+    jobs_root = config.get_data_dir() / "vibetube"
+    if not jobs_root.exists():
+        return []
+
+    jobs: List[models.VibeTubeJobResponse] = []
+    for job_dir in jobs_root.iterdir():
+        if not job_dir.is_dir():
+            continue
+
+        meta_path = job_dir / "meta.json"
+        created_ts = datetime.fromtimestamp(job_dir.stat().st_mtime)
+        duration_sec: Optional[float] = None
+        video_path: Optional[str] = None
+
+        if meta_path.exists():
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                duration_sec = float(meta.get("duration_sec")) if meta.get("duration_sec") is not None else None
+            except Exception:
+                duration_sec = None
+
+        webm_path = job_dir / "avatar.webm"
+        if webm_path.exists():
+            video_path = str(webm_path.resolve())
+
+        jobs.append(
+            models.VibeTubeJobResponse(
+                job_id=job_dir.name,
+                created_at=created_ts,
+                duration_sec=duration_sec,
+                video_path=video_path,
+            )
+        )
+
+    jobs.sort(key=lambda item: item.created_at, reverse=True)
+    return jobs
+
+
+@app.delete("/vibetube/jobs/{job_id}")
+async def delete_vibetube_job(job_id: str):
+    """Delete one VibeTube render job and all generated files."""
+    job_dir = config.get_data_dir() / "vibetube" / job_id
+    if not job_dir.exists() or not job_dir.is_dir():
+        raise HTTPException(status_code=404, detail="VibeTube job not found")
+
+    shutil.rmtree(job_dir, ignore_errors=True)
+    return {"message": "VibeTube job deleted"}
+
+
 # ============================================
 # HISTORY ENDPOINTS
 # ============================================
@@ -849,8 +1123,8 @@ async def vibetube_render(
 async def list_history(
     profile_id: Optional[str] = None,
     search: Optional[str] = None,
-    limit: int = 50,
-    offset: int = 0,
+    limit: int = Query(default=50, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
     """List generation history with optional filters."""

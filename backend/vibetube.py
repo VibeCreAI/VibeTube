@@ -7,6 +7,7 @@ from __future__ import annotations
 import contextlib
 import json
 import math
+import random
 import shutil
 import subprocess
 import wave
@@ -31,6 +32,12 @@ def render_overlay(
     off_threshold: float = 0.02,
     smoothing_windows: int = 3,
     min_hold_windows: int = 1,
+    blink_min_interval_sec: float = 3.5,
+    blink_max_interval_sec: float = 5.5,
+    blink_duration_frames: int = 3,
+    head_motion_amount_px: float = 3.0,
+    head_motion_change_sec: float = 2.8,
+    head_motion_smoothness: float = 0.04,
     text: Optional[str] = None,
 ) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -60,6 +67,12 @@ def render_overlay(
         total_frames=total_frames,
         timeline=timeline,
         assets=assets,
+        blink_min_interval_sec=blink_min_interval_sec,
+        blink_max_interval_sec=blink_max_interval_sec,
+        blink_duration_frames=blink_duration_frames,
+        head_motion_amount_px=head_motion_amount_px,
+        head_motion_change_sec=head_motion_change_sec,
+        head_motion_smoothness=head_motion_smoothness,
     )
 
     captions_path = None
@@ -76,6 +89,16 @@ def render_overlay(
         "video": "avatar.webm",
         "timeline": "timeline.json",
         "captions": captions_path.name if captions_path else None,
+        "blink": {
+            "min_interval_sec": blink_min_interval_sec,
+            "max_interval_sec": blink_max_interval_sec,
+            "duration_frames": blink_duration_frames,
+        },
+        "head_motion": {
+            "amount_px": head_motion_amount_px,
+            "change_sec": head_motion_change_sec,
+            "smoothness": head_motion_smoothness,
+        },
     }
     meta_path = output_dir / "meta.json"
     meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
@@ -88,6 +111,40 @@ def render_overlay(
         "captions_path": str(captions_path) if captions_path else None,
         "meta_path": str(meta_path),
     }
+
+
+def export_mp4(webm_path: Path, mp4_path: Path) -> Path:
+    """Transcode rendered WebM to MP4 (H.264 + AAC)."""
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise VibeTubeError("ffmpeg not found on PATH.")
+
+    if not webm_path.exists():
+        raise VibeTubeError(f"Rendered video not found: {webm_path}")
+
+    mp4_path.parent.mkdir(parents=True, exist_ok=True)
+
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-i",
+        str(webm_path),
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        str(mp4_path),
+    ]
+
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise VibeTubeError(f"ffmpeg MP4 export failed: {proc.stderr}")
+
+    return mp4_path
 
 
 def _wav_duration_seconds(wav_path: Path) -> float:
@@ -211,7 +268,7 @@ def _hysteresis_states(
     return out
 
 
-def _load_avatar_assets(avatar_dir: Path, width: int, height: int) -> dict[str, Optional[bytes]]:
+def _load_avatar_assets(avatar_dir: Path, width: int, height: int) -> dict[str, Optional[Image.Image]]:
     return {
         "idle": _load_image(avatar_dir / "idle.png", width, height, required=True),
         "talk": _load_image(avatar_dir / "talk.png", width, height, required=True),
@@ -221,7 +278,7 @@ def _load_avatar_assets(avatar_dir: Path, width: int, height: int) -> dict[str, 
     }
 
 
-def _load_image(path: Path, width: int, height: int, required: bool) -> Optional[bytes]:
+def _load_image(path: Path, width: int, height: int, required: bool) -> Optional[Image.Image]:
     if not path.exists():
         if required:
             raise VibeTubeError(f"Missing avatar file: {path.name}")
@@ -232,7 +289,7 @@ def _load_image(path: Path, width: int, height: int, required: bool) -> Optional
         pixels = list(rgba.getdata())
         cleaned = [(0, 0, 0, 0) if a == 0 else (r, g, b, a) for (r, g, b, a) in pixels]
         rgba.putdata(cleaned)
-        return rgba.tobytes()
+        return rgba.copy()
 
 
 def _export_webm(
@@ -243,7 +300,13 @@ def _export_webm(
     height: int,
     total_frames: int,
     timeline: list[dict[str, str | int]],
-    assets: dict[str, Optional[bytes]],
+    assets: dict[str, Optional[Image.Image]],
+    blink_min_interval_sec: float,
+    blink_max_interval_sec: float,
+    blink_duration_frames: int,
+    head_motion_amount_px: float,
+    head_motion_change_sec: float,
+    head_motion_smoothness: float,
 ) -> None:
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
@@ -282,6 +345,27 @@ def _export_webm(
     change_idx = 0
     current_state = str(timeline[0]["state"]) if timeline else "idle"
     next_frame = int(timeline[1]["frame"]) if len(timeline) > 1 else total_frames
+    min_interval = max(0.2, float(blink_min_interval_sec))
+    max_interval = max(min_interval, float(blink_max_interval_sec))
+    blink_frames = max(1, int(blink_duration_frames))
+    rng = random.Random(1337)
+    next_blink_frame = max(1, int(round(min_interval * fps)))
+    blink_remaining = 0
+    frame_cache: dict[tuple[str, int, int], bytes] = {}
+
+    max_motion = max(0.0, float(head_motion_amount_px))
+    max_offset = int(round(max_motion))
+    move_change_sec = max(0.25, float(head_motion_change_sec))
+    smoothness = min(1.0, max(0.001, float(head_motion_smoothness)))
+    cur_x = 0.0
+    cur_y = 0.0
+    target_x = 0.0
+    target_y = 0.0
+    next_motion_change = 0
+    if max_offset > 0:
+        target_x = rng.uniform(-max_motion, max_motion)
+        target_y = rng.uniform(-max_motion, max_motion)
+        next_motion_change = max(1, int(round(move_change_sec * fps)))
 
     try:
         for frame in range(total_frames):
@@ -290,16 +374,48 @@ def _export_webm(
                 current_state = str(timeline[change_idx]["state"])
                 next_frame = int(timeline[change_idx + 1]["frame"]) if change_idx + 1 < len(timeline) else total_frames
 
-            blinking = (frame % (fps * 4)) in (0, 1, 2)
-            if current_state == "talk":
-                frame_bytes = assets["talk_blink"] if blinking and assets["talk_blink"] else None
-                frame_bytes = frame_bytes or (assets["blink"] if blinking and assets["blink"] else None)
-                frame_bytes = frame_bytes or assets["talk"]
-            else:
-                frame_bytes = assets["idle_blink"] if blinking and assets["idle_blink"] else None
-                frame_bytes = frame_bytes or (assets["blink"] if blinking and assets["blink"] else None)
-                frame_bytes = frame_bytes or assets["idle"]
+            if frame >= next_blink_frame:
+                blink_remaining = blink_frames
+                next_interval = rng.uniform(min_interval, max_interval)
+                next_blink_frame = frame + max(1, int(round(next_interval * fps)))
 
+            blinking = blink_remaining > 0
+            if blink_remaining > 0:
+                blink_remaining -= 1
+
+            if max_offset > 0 and frame >= next_motion_change:
+                target_x = rng.uniform(-max_motion, max_motion)
+                target_y = rng.uniform(-max_motion, max_motion)
+                interval_scale = rng.uniform(0.8, 1.35)
+                next_motion_change = frame + max(1, int(round(move_change_sec * interval_scale * fps)))
+
+            if max_offset > 0:
+                cur_x += (target_x - cur_x) * smoothness
+                cur_y += (target_y - cur_y) * smoothness
+                offset_x = int(round(max(-max_motion, min(max_motion, cur_x))))
+                offset_y = int(round(max(-max_motion, min(max_motion, cur_y))))
+            else:
+                offset_x = 0
+                offset_y = 0
+
+            if current_state == "talk":
+                asset_key = "talk_blink" if blinking and assets["talk_blink"] else None
+                asset_key = asset_key or ("blink" if blinking and assets["blink"] else None)
+                asset_key = asset_key or "talk"
+            else:
+                asset_key = "idle_blink" if blinking and assets["idle_blink"] else None
+                asset_key = asset_key or ("blink" if blinking and assets["blink"] else None)
+                asset_key = asset_key or "idle"
+
+            frame_bytes = _frame_bytes_for_asset(
+                assets=assets,
+                asset_key=asset_key,
+                offset_x=offset_x,
+                offset_y=offset_y,
+                width=width,
+                height=height,
+                frame_cache=frame_cache,
+            )
             if frame_bytes is None:
                 raise VibeTubeError("Avatar assets were not loaded correctly.")
             proc.stdin.write(frame_bytes)
@@ -309,6 +425,35 @@ def _export_webm(
     _, stderr = proc.communicate()
     if proc.returncode != 0:
         raise VibeTubeError(f"ffmpeg failed: {stderr.decode('utf-8', errors='ignore')}")
+
+
+def _frame_bytes_for_asset(
+    assets: dict[str, Optional[Image.Image]],
+    asset_key: str,
+    offset_x: int,
+    offset_y: int,
+    width: int,
+    height: int,
+    frame_cache: dict[tuple[str, int, int], bytes],
+) -> Optional[bytes]:
+    src = assets.get(asset_key)
+    if src is None:
+        return None
+
+    cache_key = (asset_key, offset_x, offset_y)
+    cached = frame_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    if offset_x == 0 and offset_y == 0:
+        frame = src
+    else:
+        frame = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        frame.alpha_composite(src, (offset_x, offset_y))
+
+    out = frame.tobytes()
+    frame_cache[cache_key] = out
+    return out
 
 
 def _write_srt(text: str, duration_sec: float, out_path: Path) -> None:

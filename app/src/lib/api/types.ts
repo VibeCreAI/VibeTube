@@ -215,11 +215,26 @@ export interface VibeTubeRenderRequest {
   off_threshold?: number;
   smoothing_windows?: number;
   min_hold_windows?: number;
-  idle: File;
-  talk: File;
+  blink_min_interval_sec?: number;
+  blink_max_interval_sec?: number;
+  blink_duration_frames?: number;
+  head_motion_amount_px?: number;
+  head_motion_change_sec?: number;
+  head_motion_smoothness?: number;
+  idle?: File;
+  talk?: File;
   idle_blink?: File;
   talk_blink?: File;
   blink?: File;
+}
+
+export interface VibeTubeAvatarPackResponse {
+  profile_id: string;
+  idle_url?: string;
+  talk_url?: string;
+  idle_blink_url?: string;
+  talk_blink_url?: string;
+  complete: boolean;
 }
 
 export interface VibeTubeRenderResponse {
@@ -231,4 +246,11 @@ export interface VibeTubeRenderResponse {
   meta_path: string;
   duration: number;
   source_generation_id?: string;
+}
+
+export interface VibeTubeJobResponse {
+  job_id: string;
+  created_at: string;
+  duration_sec?: number;
+  video_path?: string;
 }

@@ -75,25 +75,6 @@ def process_avatar(input_path: str, output_path: str, max_size: int = MAX_SIZE) 
             # No EXIF data or orientation tag
             pass
         
-        # Convert to RGB if necessary (handles RGBA, P, CMYK, etc.)
-        if img.mode not in ('RGB', 'L'):
-            if img.mode == 'RGBA':
-                # Create white background for RGBA images
-                background = Image.new('RGB', img.size, (255, 255, 255))
-                background.paste(img, mask=img.split()[3])  # Use alpha channel as mask
-                img = background
-            elif img.mode == 'CMYK':
-                # Convert CMYK to RGB
-                img = img.convert('RGB')
-            elif img.mode == 'P':
-                # Convert palette mode to RGB
-                img = img.convert('RGB')
-            else:
-                img = img.convert('RGB')
-        
-        # Calculate new size maintaining aspect ratio
-        img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
-        
         # Determine output format from extension
         output_ext = Path(output_path).suffix.lower()
         
@@ -105,6 +86,35 @@ def process_avatar(input_path: str, output_path: str, max_size: int = MAX_SIZE) 
         }
         
         output_format = format_map.get(output_ext, 'PNG')
+
+        # Preserve transparency for PNG/WEBP; only flatten alpha for JPEG.
+        has_alpha = ('A' in img.getbands()) or (img.mode == 'P' and 'transparency' in img.info)
+
+        if output_format in ('PNG', 'WEBP'):
+            if has_alpha:
+                img = img.convert('RGBA')
+            elif img.mode == 'CMYK':
+                img = img.convert('RGB')
+            elif img.mode == 'P':
+                img = img.convert('RGB')
+            elif img.mode not in ('RGB', 'L'):
+                img = img.convert('RGB')
+        else:
+            # JPEG cannot store alpha, so flatten over white.
+            if has_alpha:
+                rgba = img.convert('RGBA')
+                background = Image.new('RGB', rgba.size, (255, 255, 255))
+                background.paste(rgba, mask=rgba.split()[3])
+                img = background
+            elif img.mode == 'CMYK':
+                img = img.convert('RGB')
+            elif img.mode == 'P':
+                img = img.convert('RGB')
+            elif img.mode not in ('RGB', 'L'):
+                img = img.convert('RGB')
+
+        # Calculate new size maintaining aspect ratio
+        img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
         
         # Save with optimization
         save_kwargs = {'optimize': True}

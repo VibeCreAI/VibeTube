@@ -1,9 +1,10 @@
 import { Link, useMatchRoute } from '@tanstack/react-router';
-import { Box, BookOpen, Clapperboard, Loader2, Mic, Server, Speaker, Volume2 } from 'lucide-react';
+import { Box, BookOpen, Clapperboard, Loader2, Mic, Moon, Server, Speaker, Sun, Volume2 } from 'lucide-react';
 import vibetubeLogo from '@/assets/vibetube-logo.png';
 import { cn } from '@/lib/utils/cn';
 import { useGenerationStore } from '@/stores/generationStore';
 import { usePlayerStore } from '@/stores/playerStore';
+import { useUIStore } from '@/stores/uiStore';
 
 interface SidebarProps {
   isMacOS?: boolean;
@@ -22,6 +23,8 @@ const tabs = [
 export function Sidebar({ isMacOS }: SidebarProps) {
   const isGenerating = useGenerationStore((state) => state.isGenerating);
   const audioUrl = usePlayerStore((state) => state.audioUrl);
+  const theme = useUIStore((state) => state.theme);
+  const setTheme = useUIStore((state) => state.setTheme);
   const isPlayerVisible = !!audioUrl;
   const matchRoute = useMatchRoute();
 
@@ -67,6 +70,19 @@ export function Sidebar({ isMacOS }: SidebarProps) {
 
       {/* Spacer to push loader to bottom */}
       <div className="flex-1" />
+
+      <button
+        type="button"
+        onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+        className={cn(
+          'w-12 h-12 rounded-full flex items-center justify-center transition-all duration-200 mb-3',
+          'hover:bg-muted/50 text-muted-foreground',
+        )}
+        title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+        aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+      >
+        {theme === 'dark' ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+      </button>
 
       {/* Generation Loader */}
       {isGenerating && (

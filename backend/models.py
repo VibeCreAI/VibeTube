@@ -87,11 +87,29 @@ class VibeTubeRenderResponse(BaseModel):
     source_generation_id: Optional[str] = None
 
 
+class VibeTubeAvatarPackResponse(BaseModel):
+    """Response model for VibeTube avatar pack bound to a voice profile."""
+    profile_id: str
+    idle_url: Optional[str] = None
+    talk_url: Optional[str] = None
+    idle_blink_url: Optional[str] = None
+    talk_blink_url: Optional[str] = None
+    complete: bool = False
+
+
+class VibeTubeJobResponse(BaseModel):
+    """Response model for one saved VibeTube render job."""
+    job_id: str
+    created_at: datetime
+    duration_sec: Optional[float] = None
+    video_path: Optional[str] = None
+
+
 class HistoryQuery(BaseModel):
     """Query model for generation history."""
     profile_id: Optional[str] = None
     search: Optional[str] = None
-    limit: int = Field(default=50, ge=1, le=100)
+    limit: int = Field(default=50, ge=1, le=1000)
     offset: int = Field(default=0, ge=0)
 
 

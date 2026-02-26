@@ -7,6 +7,7 @@ __pycache__/
 *.so
 .Python
 venv/
+.venv/
 env/
 ENV/
 *.prompt
@@ -39,6 +40,9 @@ data/profiles/*
 data/generations/*
 data/projects/*
 data/voicebox.db
+data/vibetube.db
+data/vibetube/
+data/tmp_transparent_*.png
 !data/.gitkeep
 
 # Logs

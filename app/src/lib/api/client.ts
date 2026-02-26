@@ -25,6 +25,8 @@ import type {
   StoryItemTrim,
   StoryItemSplit,
   VibeTubeRenderRequest,
+  VibeTubeAvatarPackResponse,
+  VibeTubeJobResponse,
   VibeTubeRenderResponse,
 } from './types';
 
@@ -526,9 +528,15 @@ class ApiClient {
     if (data.off_threshold !== undefined) formData.append('off_threshold', String(data.off_threshold));
     if (data.smoothing_windows !== undefined) formData.append('smoothing_windows', String(data.smoothing_windows));
     if (data.min_hold_windows !== undefined) formData.append('min_hold_windows', String(data.min_hold_windows));
+    if (data.blink_min_interval_sec !== undefined) formData.append('blink_min_interval_sec', String(data.blink_min_interval_sec));
+    if (data.blink_max_interval_sec !== undefined) formData.append('blink_max_interval_sec', String(data.blink_max_interval_sec));
+    if (data.blink_duration_frames !== undefined) formData.append('blink_duration_frames', String(data.blink_duration_frames));
+    if (data.head_motion_amount_px !== undefined) formData.append('head_motion_amount_px', String(data.head_motion_amount_px));
+    if (data.head_motion_change_sec !== undefined) formData.append('head_motion_change_sec', String(data.head_motion_change_sec));
+    if (data.head_motion_smoothness !== undefined) formData.append('head_motion_smoothness', String(data.head_motion_smoothness));
 
-    formData.append('idle', data.idle);
-    formData.append('talk', data.talk);
+    if (data.idle) formData.append('idle', data.idle);
+    if (data.talk) formData.append('talk', data.talk);
     if (data.idle_blink) formData.append('idle_blink', data.idle_blink);
     if (data.talk_blink) formData.append('talk_blink', data.talk_blink);
     if (data.blink) formData.append('blink', data.blink);
@@ -542,6 +550,62 @@ class ApiClient {
       throw new Error(error.detail || `HTTP error! status: ${response.status}`);
     }
     return response.json();
+  }
+
+  getVibeTubePreviewUrl(jobId: string): string {
+    return `${this.getBaseUrl()}/vibetube/jobs/${jobId}/video`;
+  }
+
+  async exportVibeTubeMp4(jobId: string): Promise<Blob> {
+    const url = `${this.getBaseUrl()}/vibetube/jobs/${jobId}/export-mp4`;
+    const response = await fetch(url);
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: response.statusText }));
+      throw new Error(error.detail || `HTTP error! status: ${response.status}`);
+    }
+    return response.blob();
+  }
+
+  async listVibeTubeJobs(): Promise<VibeTubeJobResponse[]> {
+    return this.request<VibeTubeJobResponse[]>('/vibetube/jobs');
+  }
+
+  async deleteVibeTubeJob(jobId: string): Promise<void> {
+    await this.request<void>(`/vibetube/jobs/${jobId}`, { method: 'DELETE' });
+  }
+
+  async getVibeTubeAvatarPack(profileId: string): Promise<VibeTubeAvatarPackResponse> {
+    return this.request<VibeTubeAvatarPackResponse>(`/profiles/${profileId}/vibetube-avatar-pack`);
+  }
+
+  async saveVibeTubeAvatarPack(data: {
+    profileId: string;
+    idle: File;
+    talk: File;
+    idleBlink: File;
+    talkBlink: File;
+  }): Promise<VibeTubeAvatarPackResponse> {
+    const url = `${this.getBaseUrl()}/profiles/${data.profileId}/vibetube-avatar-pack`;
+    const formData = new FormData();
+    formData.append('idle', data.idle);
+    formData.append('talk', data.talk);
+    formData.append('idle_blink', data.idleBlink);
+    formData.append('talk_blink', data.talkBlink);
+
+    const response = await fetch(url, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: response.statusText }));
+      throw new Error(error.detail || `HTTP error! status: ${response.status}`);
+    }
+    return response.json();
+  }
+
+  getVibeTubeAvatarStateUrl(profileId: string, state: 'idle' | 'talk' | 'idle_blink' | 'talk_blink'): string {
+    return `${this.getBaseUrl()}/profiles/${profileId}/vibetube-avatar-pack/${state}`;
   }
 }
 

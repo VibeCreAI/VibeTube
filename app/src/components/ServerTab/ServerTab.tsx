@@ -15,12 +15,12 @@ export function ServerTab() {
       <div className="py-8 text-center text-sm text-muted-foreground">
         Created by{' '}
         <a
-          href="https://github.com/jamiepine"
+          href="https://github.com/VibeCreAI"
           target="_blank"
           rel="noopener noreferrer"
           className="text-accent hover:underline"
         >
-          Jamie Pine
+          VibeCreAI
         </a>
       </div>
     </div>
