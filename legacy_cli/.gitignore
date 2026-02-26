@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+
+# Local render artifacts
+output/
+input/output/
+input/audio/
+input/avatar_pack/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build metadata
+*.egg-info/
