@@ -19,14 +19,17 @@ import {
   FormLabel,
   FormMessage,
 } from '@/components/ui/form';
+import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
 import { useAudioRecording } from '@/lib/hooks/useAudioRecording';
+import type { AudioProcessingOptions } from '@/lib/hooks/useAudioRecording';
 import { useAddSample, useProfile } from '@/lib/hooks/useProfiles';
 import { useSystemAudioCapture } from '@/lib/hooks/useSystemAudioCapture';
 import { useTranscription } from '@/lib/hooks/useTranscription';
+import { applyGainToAudioFile } from '@/lib/utils/audio';
 import { usePlatform } from '@/platform/PlatformContext';
 import { AudioSampleRecording } from './AudioSampleRecording';
 import { AudioSampleSystem } from './AudioSampleSystem';
@@ -55,6 +58,12 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
   const { data: profile } = useProfile(profileId);
   const { toast } = useToast();
   const [mode, setMode] = useState<'upload' | 'record' | 'system'>('upload');
+  const [recordGainDb, setRecordGainDb] = useState(0);
+  const [audioProcessing, setAudioProcessing] = useState<AudioProcessingOptions>({
+    autoGainControl: true,
+    noiseSuppression: true,
+    echoCancellation: true,
+  });
   const { isPlaying, playPause, cleanup: cleanupAudio } = useAudioPlayer();
 
   const form = useForm<SampleFormValues>({
@@ -75,6 +84,7 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
     cancelRecording,
   } = useAudioRecording({
     maxDurationSeconds: 29,
+    audioProcessing,
     onRecordingComplete: (blob, recordedDuration) => {
       // Convert blob to File object
       const file = new File([blob], `recording-${Date.now()}.webm`, {
@@ -168,9 +178,14 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
 
   async function onSubmit(data: SampleFormValues) {
     try {
+      let fileToUpload = data.file;
+      if (mode === 'record' && Math.abs(recordGainDb) > 0.001) {
+        fileToUpload = await applyGainToAudioFile(data.file, recordGainDb);
+      }
+
       await addSample.mutateAsync({
         profileId,
-        file: data.file,
+        file: fileToUpload,
         referenceText: data.referenceText,
       });
 
@@ -193,6 +208,7 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
     if (!newOpen) {
       form.reset();
       setMode('upload');
+      setRecordGainDb(0);
       if (isRecording) {
         cancelRecording();
       }
@@ -278,6 +294,8 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
                       file={selectedFile}
                       isRecording={isRecording}
                       duration={duration}
+                      audioProcessing={audioProcessing}
+                      onAudioProcessingChange={setAudioProcessing}
                       onStart={startRecording}
                       onStop={stopRecording}
                       onCancel={handleCancelRecording}
@@ -288,6 +306,30 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
                     />
                   )}
                 />
+                {selectedFile && !isRecording && (
+                  <FormItem>
+                    <FormLabel>Recorded Sample Gain (dB)</FormLabel>
+                    <div className="flex items-center gap-3">
+                      <Input
+                        type="range"
+                        min={-12}
+                        max={24}
+                        step={1}
+                        value={recordGainDb}
+                        onChange={(e) => setRecordGainDb(Number(e.target.value))}
+                      />
+                      <Input
+                        type="number"
+                        min={-12}
+                        max={24}
+                        step={1}
+                        value={recordGainDb}
+                        onChange={(e) => setRecordGainDb(Number(e.target.value))}
+                        className="w-20"
+                      />
+                    </div>
+                  </FormItem>
+                )}
               </TabsContent>
 
               {platform.metadata.isTauri && isSystemAudioSupported && (

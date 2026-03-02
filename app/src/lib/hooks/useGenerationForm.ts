@@ -4,6 +4,7 @@ import { useForm } from 'react-hook-form';
 import * as z from 'zod';
 import { useToast } from '@/components/ui/use-toast';
 import { apiClient } from '@/lib/api/client';
+import type { GenerationResponse } from '@/lib/api/types';
 import { LANGUAGE_CODES, type LanguageCode } from '@/lib/constants/languages';
 import { useGeneration } from '@/lib/hooks/useGeneration';
 import { useModelDownloadToast } from '@/lib/hooks/useModelDownloadToast';
@@ -21,8 +22,9 @@ const generationSchema = z.object({
 export type GenerationFormValues = z.infer<typeof generationSchema>;
 
 interface UseGenerationFormOptions {
-  onSuccess?: (generationId: string) => void;
+  onSuccess?: (generationId: string, generation: GenerationResponse) => void | Promise<void>;
   defaultValues?: Partial<GenerationFormValues>;
+  autoPlayAudioOnSuccess?: boolean;
 }
 
 export function useGenerationForm(options: UseGenerationFormOptions = {}) {
@@ -50,6 +52,7 @@ export function useGenerationForm(options: UseGenerationFormOptions = {}) {
       ...options.defaultValues,
     },
   });
+  const autoPlayAudioOnSuccess = options.autoPlayAudioOnSuccess ?? true;
 
   async function handleSubmit(
     data: GenerationFormValues,
@@ -96,11 +99,19 @@ export function useGenerationForm(options: UseGenerationFormOptions = {}) {
         description: `Audio generated (${result.duration.toFixed(2)}s)`,
       });
 
-      const audioUrl = apiClient.getAudioUrl(result.id);
-      setAudioWithAutoPlay(audioUrl, result.id, selectedProfileId, data.text.substring(0, 50));
+      if (autoPlayAudioOnSuccess) {
+        const audioUrl = apiClient.getAudioUrl(result.id);
+        setAudioWithAutoPlay(audioUrl, result.id, selectedProfileId, data.text.substring(0, 50));
+      }
 
       form.reset();
-      options.onSuccess?.(result.id);
+      if (options.onSuccess) {
+        try {
+          await options.onSuccess(result.id, result);
+        } catch (error) {
+          console.error('onSuccess callback failed:', error);
+        }
+      }
     } catch (error) {
       toast({
         title: 'Generation failed',

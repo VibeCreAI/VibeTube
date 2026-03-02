@@ -1,7 +1,8 @@
 import {
   AudioWaveform,
+  Clapperboard,
   Download,
-  FileArchive,
+  Eye,
   Loader2,
   MoreHorizontal,
   Play,
@@ -26,24 +27,29 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
 import { apiClient } from '@/lib/api/client';
-import type { HistoryResponse } from '@/lib/api/types';
+import type { HistoryResponse, VibeTubeJobResponse } from '@/lib/api/types';
 import { BOTTOM_SAFE_AREA_PADDING } from '@/lib/constants/ui';
 import {
   useDeleteGeneration,
-  useExportGeneration,
   useExportGenerationAudio,
   useHistory,
   useImportGeneration,
 } from '@/lib/hooks/useHistory';
 import { cn } from '@/lib/utils/cn';
 import { formatDate, formatDuration } from '@/lib/utils/format';
+import {
+  getPersistedVibeTubeBackgroundImageFileAsync,
+  getPersistedVibeTubeRenderSettings,
+} from '@/lib/utils/vibetubeSettings';
 import { usePlayerStore } from '@/stores/playerStore';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 // OLD TABLE-BASED COMPONENT - REMOVED (can be found in git history)
 // This is the new alternate history view with fixed height rows
 
 // NEW ALTERNATE HISTORY VIEW - FIXED HEIGHT ROWS WITH INFINITE SCROLL
 export function HistoryTable() {
+  const queryClient = useQueryClient();
   const [page, setPage] = useState(0);
   const [allHistory, setAllHistory] = useState<HistoryResponse[]>([]);
   const [total, setTotal] = useState(0);
@@ -55,6 +61,11 @@ export function HistoryTable() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [generationToDelete, setGenerationToDelete] = useState<{ id: string; name: string } | null>(null);
+  const [vibeDialogOpen, setVibeDialogOpen] = useState(false);
+  const [selectedGeneration, setSelectedGeneration] = useState<HistoryResponse | null>(null);
+  const [selectedVibeJobId, setSelectedVibeJobId] = useState<string | null>(null);
+  const [renderingGenerationIds, setRenderingGenerationIds] = useState<Set<string>>(new Set());
+  const [isDeletingVibeRender, setIsDeletingVibeRender] = useState(false);
   const limit = 20;
   const { toast } = useToast();
 
@@ -63,12 +74,12 @@ export function HistoryTable() {
     isLoading,
     isFetching,
   } = useHistory({
+    exclude_story_generations: true,
     limit,
     offset: page * limit,
   });
 
   const deleteGeneration = useDeleteGeneration();
-  const exportGeneration = useExportGeneration();
   const exportGenerationAudio = useExportGenerationAudio();
   const importGeneration = useImportGeneration();
   const setAudioWithAutoPlay = usePlayerStore((state) => state.setAudioWithAutoPlay);
@@ -77,6 +88,10 @@ export function HistoryTable() {
   const isPlaying = usePlayerStore((state) => state.isPlaying);
   const audioUrl = usePlayerStore((state) => state.audioUrl);
   const isPlayerVisible = !!audioUrl;
+  const vibetubeJobsQuery = useQuery({
+    queryKey: ['vibetube-jobs'],
+    queryFn: () => apiClient.listVibeTubeJobs(),
+  });
 
   // Update accumulated history when new data arrives
   useEffect(() => {
@@ -166,21 +181,6 @@ export function HistoryTable() {
     );
   };
 
-  const handleExportPackage = (generationId: string, text: string) => {
-    exportGeneration.mutate(
-      { generationId, text },
-      {
-        onError: (error) => {
-          toast({
-            title: 'Failed to export generation',
-            description: error.message,
-            variant: 'destructive',
-          });
-        },
-      },
-    );
-  };
-
   const handleDeleteClick = (generationId: string, profileName: string) => {
     setGenerationToDelete({ id: generationId, name: profileName });
     setDeleteDialogOpen(true);
@@ -191,6 +191,105 @@ export function HistoryTable() {
       deleteGeneration.mutate(generationToDelete.id);
       setDeleteDialogOpen(false);
       setGenerationToDelete(null);
+    }
+  };
+
+  const openVibeDialog = (gen: HistoryResponse) => {
+    setSelectedGeneration(gen);
+    setSelectedVibeJobId(null);
+    vibetubeJobsQuery.refetch();
+    setVibeDialogOpen(true);
+  };
+
+  const handleRenderVibeTube = async (gen: HistoryResponse) => {
+    setRenderingGenerationIds((prev) => {
+      const next = new Set(prev);
+      next.add(gen.id);
+      return next;
+    });
+    toast({
+      title: 'Rendering video...',
+      description: 'VibeTube render started in background for this generation.',
+    });
+    try {
+      const settings = getPersistedVibeTubeRenderSettings();
+      const backgroundImage = settings.use_background_image
+        ? await getPersistedVibeTubeBackgroundImageFileAsync()
+        : undefined;
+      const result = await apiClient.renderVibeTube({
+        profile_id: gen.profile_id,
+        generation_id: gen.id,
+        ...settings,
+        background_image: backgroundImage,
+      });
+      await queryClient.invalidateQueries({ queryKey: ['vibetube-jobs'] });
+      setSelectedVibeJobId(result.job_id);
+      toast({
+        title: 'VibeTube render complete',
+        description: `Render ${result.job_id.slice(0, 8)} linked to this generation.`,
+      });
+      openVibeDialog(gen);
+    } catch (error) {
+      toast({
+        title: 'Render failed',
+        description: error instanceof Error ? error.message : 'Unknown error',
+        variant: 'destructive',
+      });
+    } finally {
+      setRenderingGenerationIds((prev) => {
+        const next = new Set(prev);
+        next.delete(gen.id);
+        return next;
+      });
+    }
+  };
+
+  const linkedJobs: VibeTubeJobResponse[] = (vibetubeJobsQuery.data ?? []).filter(
+    (job) => selectedGeneration && job.source_generation_id === selectedGeneration.id,
+  );
+  const selectedVibeJob =
+    linkedJobs.find((job) => job.job_id === selectedVibeJobId) ?? linkedJobs[0] ?? null;
+
+  const handleDeleteVibeRender = async (jobId: string) => {
+    const confirmed = await confirm('Delete this linked VibeTube render?');
+    if (!confirmed) return;
+    setIsDeletingVibeRender(true);
+    try {
+      await apiClient.deleteVibeTubeJob(jobId);
+      await queryClient.invalidateQueries({ queryKey: ['vibetube-jobs'] });
+      if (selectedVibeJobId === jobId) {
+        setSelectedVibeJobId(null);
+      }
+      toast({ title: 'Render deleted', description: 'Linked VibeTube render removed.' });
+    } catch (error) {
+      toast({
+        title: 'Delete failed',
+        description: error instanceof Error ? error.message : 'Unknown error',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsDeletingVibeRender(false);
+    }
+  };
+
+  const handleExportVibeMp4 = async (jobId: string) => {
+    try {
+      const blob = await apiClient.exportVibeTubeMp4(jobId);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `vibetube-${jobId}.mp4`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      toast({ title: 'MP4 exported', description: 'Saved linked VibeTube MP4.' });
+    } catch (error) {
+      toast({
+        title: 'Export failed',
+        description: error instanceof Error ? error.message : 'Unknown error',
+        variant: 'destructive',
+      });
     }
   };
 
@@ -250,6 +349,7 @@ export function HistoryTable() {
           >
             {history.map((gen) => {
               const isCurrentlyPlaying = currentAudioId === gen.id && isPlaying;
+              const isRenderingVideo = renderingGenerationIds.has(gen.id);
               return (
                 <div
                   key={gen.id}
@@ -285,6 +385,12 @@ export function HistoryTable() {
                     <div className="text-xs text-muted-foreground">
                       {formatDate(gen.created_at)}
                     </div>
+                    {isRenderingVideo && (
+                      <div className="flex items-center gap-1.5 text-xs text-accent">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        <span>Rendering video...</span>
+                      </div>
+                    )}
                   </div>
 
                   {/* Right side - Transcript textarea */}
@@ -318,7 +424,7 @@ export function HistoryTable() {
                           onClick={() => handlePlay(gen.id, gen.text, gen.profile_id)}
                         >
                           <Play className="mr-2 h-4 w-4" />
-                          Play
+                          Play Audio
                         </DropdownMenuItem>
                         <DropdownMenuItem
                           onClick={() => handleDownloadAudio(gen.id, gen.text)}
@@ -328,11 +434,15 @@ export function HistoryTable() {
                           Export Audio
                         </DropdownMenuItem>
                         <DropdownMenuItem
-                          onClick={() => handleExportPackage(gen.id, gen.text)}
-                          disabled={exportGeneration.isPending}
+                          onClick={() => handleRenderVibeTube(gen)}
+                          disabled={isRenderingVideo}
                         >
-                          <FileArchive className="mr-2 h-4 w-4" />
-                          Export Package
+                          <Clapperboard className="mr-2 h-4 w-4" />
+                          {isRenderingVideo ? 'Rendering...' : 'Render Video'}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => openVibeDialog(gen)}>
+                          <Eye className="mr-2 h-4 w-4" />
+                          Preveiw/Export Video
                         </DropdownMenuItem>
                         <DropdownMenuItem
                           onClick={() => handleDeleteClick(gen.id, gen.profile_name)}
@@ -421,6 +531,95 @@ export function HistoryTable() {
               disabled={importGeneration.isPending || !selectedFile}
             >
               {importGeneration.isPending ? 'Importing...' : 'Import'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={vibeDialogOpen} onOpenChange={setVibeDialogOpen}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Linked VibeTube Renders</DialogTitle>
+            <DialogDescription>
+              {selectedGeneration
+                ? `${selectedGeneration.profile_name} | ${selectedGeneration.text.slice(0, 80)}`
+                : 'Select a generation to view linked renders.'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="flex flex-wrap gap-2">
+              {selectedGeneration && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleRenderVibeTube(selectedGeneration)}
+                  disabled={renderingGenerationIds.has(selectedGeneration.id)}
+                >
+                  <Clapperboard className="mr-2 h-4 w-4" />
+                  {renderingGenerationIds.has(selectedGeneration.id) ? 'Rendering...' : 'Render New'}
+                </Button>
+              )}
+              {selectedVibeJob && (
+                <>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleExportVibeMp4(selectedVibeJob.job_id)}
+                  >
+                    <Download className="mr-2 h-4 w-4" />
+                    Export MP4
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleDeleteVibeRender(selectedVibeJob.job_id)}
+                    disabled={isDeletingVibeRender}
+                  >
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    {isDeletingVibeRender ? 'Deleting...' : 'Delete'}
+                  </Button>
+                </>
+              )}
+            </div>
+
+            {selectedVibeJob ? (
+              <video
+                className="w-full rounded-lg border bg-black/60 max-h-[380px]"
+                controls
+                preload="metadata"
+                src={apiClient.getVibeTubePreviewUrl(selectedVibeJob.job_id)}
+              />
+            ) : (
+              <div className="text-sm text-muted-foreground">
+                No linked render found for this generation yet.
+              </div>
+            )}
+
+            {linkedJobs.length > 0 && (
+              <div className="space-y-2 max-h-44 overflow-y-auto border rounded-md p-2">
+                {linkedJobs.map((job) => (
+                  <button
+                    key={job.job_id}
+                    type="button"
+                    className={cn(
+                      'w-full text-left rounded-md border px-3 py-2 text-sm hover:bg-muted/60 transition-colors',
+                      selectedVibeJob?.job_id === job.job_id && 'bg-muted',
+                    )}
+                    onClick={() => setSelectedVibeJobId(job.job_id)}
+                  >
+                    <div className="font-medium">{job.job_id.slice(0, 8)}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {formatDate(job.created_at)} |{' '}
+                      {job.duration_sec != null ? formatDuration(job.duration_sec) : '--'}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setVibeDialogOpen(false)}>
+              Close
             </Button>
           </DialogFooter>
         </DialogContent>

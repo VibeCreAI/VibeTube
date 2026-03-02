@@ -7,6 +7,7 @@ from datetime import datetime
 import uuid
 import shutil
 from pathlib import Path
+import numpy as np
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 
@@ -19,6 +20,8 @@ from .models import (
 from .database import (
     VoiceProfile as DBVoiceProfile,
     ProfileSample as DBProfileSample,
+    Generation as DBGeneration,
+    StoryItem as DBStoryItem,
 )
 from .utils.audio import validate_reference_audio, load_audio, save_audio
 from .utils.images import validate_image, process_avatar
@@ -167,7 +170,10 @@ async def get_profile_samples(
     return [ProfileSampleResponse.model_validate(s) for s in samples]
 
 
-async def list_profiles(db: Session) -> List[VoiceProfileResponse]:
+async def list_profiles(
+    db: Session,
+    exclude_story_only: bool = False,
+) -> List[VoiceProfileResponse]:
     """
     List all voice profiles.
     
@@ -180,7 +186,29 @@ async def list_profiles(db: Session) -> List[VoiceProfileResponse]:
     profiles = db.query(DBVoiceProfile).order_by(
         DBVoiceProfile.created_at.desc()
     ).all()
-    
+
+    if exclude_story_only:
+        story_profile_ids = {
+            row[0]
+            for row in db.query(DBGeneration.profile_id)
+            .join(DBStoryItem, DBStoryItem.generation_id == DBGeneration.id)
+            .distinct()
+            .all()
+        }
+        non_story_profile_ids = {
+            row[0]
+            for row in db.query(DBGeneration.profile_id)
+            .outerjoin(DBStoryItem, DBStoryItem.generation_id == DBGeneration.id)
+            .filter(DBStoryItem.id.is_(None))
+            .distinct()
+            .all()
+        }
+        profiles = [
+            p
+            for p in profiles
+            if (p.id not in story_profile_ids) or (p.id in non_story_profile_ids)
+        ]
+
     return [VoiceProfileResponse.model_validate(p) for p in profiles]
 
 
@@ -320,6 +348,46 @@ async def update_profile_sample(
     # Since the reference text changed, cache keys and combined text are now stale
     clear_profile_cache(profile_id)
     
+    return ProfileSampleResponse.model_validate(sample)
+
+
+async def apply_gain_to_profile_sample(
+    sample_id: str,
+    gain_db: float,
+    db: Session,
+) -> Optional[ProfileSampleResponse]:
+    """
+    Apply gain to a profile sample audio file.
+
+    Args:
+        sample_id: Sample ID
+        gain_db: Gain amount in decibels
+        db: Database session
+
+    Returns:
+        Updated sample or None if not found
+    """
+    sample = db.query(DBProfileSample).filter_by(id=sample_id).first()
+    if not sample:
+        return None
+
+    audio_path = Path(sample.audio_path)
+    if not audio_path.exists():
+        raise ValueError("Sample audio file not found")
+
+    audio, sr = load_audio(str(audio_path))
+    gain_linear = 10 ** (gain_db / 20.0)
+    adjusted = np.clip(audio * gain_linear, -0.999, 0.999).astype(np.float32)
+    save_audio(adjusted, str(audio_path), sr)
+
+    profile = db.query(DBVoiceProfile).filter_by(id=sample.profile_id).first()
+    if profile:
+        profile.updated_at = datetime.utcnow()
+
+    db.commit()
+    db.refresh(sample)
+
+    clear_profile_cache(sample.profile_id)
     return ProfileSampleResponse.model_validate(sample)
 
 

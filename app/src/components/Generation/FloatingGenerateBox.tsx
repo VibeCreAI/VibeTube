@@ -1,8 +1,11 @@
+import { useQueryClient } from '@tanstack/react-query';
 import { useMatchRoute } from '@tanstack/react-router';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Loader2, SlidersHorizontal, Sparkles } from 'lucide-react';
+import { Clapperboard, Loader2, SlidersHorizontal, Sparkles } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Form, FormControl, FormField, FormItem, FormMessage } from '@/components/ui/form';
 import {
   Select,
@@ -13,11 +16,16 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
+import { apiClient } from '@/lib/api/client';
 import { LANGUAGE_OPTIONS } from '@/lib/constants/languages';
 import { useGenerationForm } from '@/lib/hooks/useGenerationForm';
 import { useProfile, useProfiles } from '@/lib/hooks/useProfiles';
 import { useAddStoryItem, useStory } from '@/lib/hooks/useStories';
 import { cn } from '@/lib/utils/cn';
+import {
+  getPersistedVibeTubeBackgroundImageFileAsync,
+  getPersistedVibeTubeRenderSettings,
+} from '@/lib/utils/vibetubeSettings';
 import { useStoryStore } from '@/stores/storyStore';
 import { useUIStore } from '@/stores/uiStore';
 
@@ -30,26 +38,42 @@ export function FloatingGenerateBox({
   isPlayerOpen = false,
   showVoiceSelector = false,
 }: FloatingGenerateBoxProps) {
+  const queryClient = useQueryClient();
+  const AUTO_VIDEO_STORAGE_KEY = 'vibetube.generate.autoVideo';
   const selectedProfileId = useUIStore((state) => state.selectedProfileId);
   const setSelectedProfileId = useUIStore((state) => state.setSelectedProfileId);
   const { data: selectedProfile } = useProfile(selectedProfileId || '');
-  const { data: profiles } = useProfiles();
   const [isExpanded, setIsExpanded] = useState(false);
   const [isInstructMode, setIsInstructMode] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const matchRoute = useMatchRoute();
   const isStoriesRoute = matchRoute({ to: '/stories' });
+  const { data: profiles } = useProfiles();
   const selectedStoryId = useStoryStore((state) => state.selectedStoryId);
   const trackEditorHeight = useStoryStore((state) => state.trackEditorHeight);
   const { data: currentStory } = useStory(selectedStoryId);
   const addStoryItem = useAddStoryItem();
   const { toast } = useToast();
+  const [isAutoRenderEnabled, setIsAutoRenderEnabled] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return window.localStorage.getItem(AUTO_VIDEO_STORAGE_KEY) === 'true';
+  });
+  const [isAutoRenderingVideo, setIsAutoRenderingVideo] = useState(false);
+  const [autoVideoPreviewOpen, setAutoVideoPreviewOpen] = useState(false);
+  const [autoVideoJobId, setAutoVideoJobId] = useState<string | null>(null);
 
   // Calculate if track editor is visible (on stories route with items)
   const hasTrackEditor = isStoriesRoute && currentStory && currentStory.items.length > 0;
 
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(AUTO_VIDEO_STORAGE_KEY, String(isAutoRenderEnabled));
+    }
+  }, [isAutoRenderEnabled]);
+
   const { form, handleSubmit, isPending } = useGenerationForm({
+    autoPlayAudioOnSuccess: !(!isStoriesRoute && isAutoRenderEnabled),
     onSuccess: async (generationId) => {
       setIsExpanded(false);
       // If on stories route and a story is selected, add generation to story
@@ -70,6 +94,52 @@ export function FloatingGenerateBox({
               error instanceof Error ? error.message : 'Could not add generation to story',
             variant: 'destructive',
           });
+        }
+      }
+
+      if (!isStoriesRoute && isAutoRenderEnabled && selectedProfileId && generationId) {
+        setIsAutoRenderingVideo(true);
+        toast({
+          title: 'Auto video rendering...',
+          description: 'Voice generated. Rendering linked video in background.',
+        });
+        try {
+          const pack = await apiClient.getVibeTubeAvatarPack(selectedProfileId);
+          if (!pack.complete) {
+            toast({
+              title: 'Auto video skipped',
+              description:
+                'This voice profile has no saved 4-state avatar pack. Save it in VibeTube tab first.',
+              variant: 'destructive',
+            });
+            return;
+          }
+
+          const settings = getPersistedVibeTubeRenderSettings();
+          const backgroundImage = settings.use_background_image
+            ? await getPersistedVibeTubeBackgroundImageFileAsync()
+            : undefined;
+          const renderResult = await apiClient.renderVibeTube({
+            profile_id: selectedProfileId,
+            generation_id: generationId,
+            ...settings,
+            background_image: backgroundImage,
+          });
+          await queryClient.invalidateQueries({ queryKey: ['vibetube-jobs'] });
+          setAutoVideoJobId(renderResult.job_id);
+          setAutoVideoPreviewOpen(true);
+          toast({
+            title: 'Auto video ready',
+            description: `Render ${renderResult.job_id.slice(0, 8)} has been created.`,
+          });
+        } catch (error) {
+          toast({
+            title: 'Auto video failed',
+            description: error instanceof Error ? error.message : 'Could not auto-render video',
+            variant: 'destructive',
+          });
+        } finally {
+          setIsAutoRenderingVideo(false);
         }
       }
     },
@@ -297,18 +367,18 @@ export function FloatingGenerateBox({
                 <div className="group relative">
                   <Button
                     type="submit"
-                    disabled={isPending || !selectedProfileId}
+                    disabled={isPending || isAutoRenderingVideo || !selectedProfileId}
                     className="h-10 w-10 rounded-full bg-accent hover:bg-accent/90 hover:scale-105 text-accent-foreground shadow-lg hover:shadow-accent/50 transition-all duration-200"
                     size="icon"
                   >
-                    {isPending ? (
+                    {isPending || isAutoRenderingVideo ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
                     ) : (
                       <Sparkles className="h-4 w-4" />
                     )}
                   </Button>
                   <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 whitespace-nowrap rounded-md bg-popover px-3 py-1.5 text-xs text-popover-foreground border border-border opacity-0 transition-opacity group-hover:opacity-100 z-[9999]">
-                    {isPending
+                    {isPending || isAutoRenderingVideo
                       ? 'Generating...'
                       : !selectedProfileId
                         ? 'Select a voice profile first'
@@ -358,6 +428,17 @@ export function FloatingGenerateBox({
                 className=" mt-3"
               >
                 <div className="flex items-center gap-2">
+                  {!isStoriesRoute && (
+                    <label className="flex items-center gap-2 px-2 py-1 rounded-full border border-border bg-card/70 text-xs whitespace-nowrap">
+                      <Checkbox
+                        checked={isAutoRenderEnabled}
+                        onCheckedChange={setIsAutoRenderEnabled}
+                        disabled={isPending || isAutoRenderingVideo}
+                      />
+                      <Clapperboard className="h-3.5 w-3.5 text-muted-foreground" />
+                      <span>Auto Video</span>
+                    </label>
+                  )}
                   {showVoiceSelector && (
                     <div className="flex-1">
                       <Select
@@ -432,6 +513,23 @@ export function FloatingGenerateBox({
           </form>
         </Form>
       </motion.div>
+      <Dialog open={autoVideoPreviewOpen} onOpenChange={setAutoVideoPreviewOpen}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Auto Video Preview</DialogTitle>
+          </DialogHeader>
+          {autoVideoJobId ? (
+            <video
+              className="w-full rounded-lg border bg-black/70 max-h-[420px]"
+              controls
+              autoPlay
+              src={apiClient.getVibeTubePreviewUrl(autoVideoJobId)}
+            />
+          ) : (
+            <div className="text-sm text-muted-foreground">No video available.</div>
+          )}
+        </DialogContent>
+      </Dialog>
     </motion.div>
   );
 }

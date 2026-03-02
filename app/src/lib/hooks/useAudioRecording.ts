@@ -5,11 +5,23 @@ import { convertToWav } from '@/lib/utils/audio';
 interface UseAudioRecordingOptions {
   maxDurationSeconds?: number;
   onRecordingComplete?: (blob: Blob, duration?: number) => void;
+  audioProcessing?: AudioProcessingOptions;
+}
+
+export interface AudioProcessingOptions {
+  echoCancellation: boolean;
+  noiseSuppression: boolean;
+  autoGainControl: boolean;
 }
 
 export function useAudioRecording({
   maxDurationSeconds = 29,
   onRecordingComplete,
+  audioProcessing = {
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+  },
 }: UseAudioRecordingOptions = {}) {
   const platform = usePlatform();
   const [isRecording, setIsRecording] = useState(false);
@@ -61,9 +73,9 @@ export function useAudioRecording({
       // Request microphone access
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
+          echoCancellation: audioProcessing.echoCancellation,
+          noiseSuppression: audioProcessing.noiseSuppression,
+          autoGainControl: audioProcessing.autoGainControl,
         },
       });
 
@@ -156,7 +168,7 @@ export function useAudioRecording({
       setError(errorMessage);
       setIsRecording(false);
     }
-  }, [maxDurationSeconds, onRecordingComplete]);
+  }, [audioProcessing, maxDurationSeconds, onRecordingComplete]);
 
   const stopRecording = useCallback(() => {
     if (mediaRecorderRef.current && isRecording) {

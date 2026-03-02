@@ -38,6 +38,10 @@ interface UIStore {
   // Theme
   theme: 'light' | 'dark';
   setTheme: (theme: 'light' | 'dark') => void;
+
+  // VibeTube shared draft state
+  vibetubeBackgroundImageData: string;
+  setVibetubeBackgroundImageData: (data: string) => void;
 }
 
 const THEME_STORAGE_KEY = 'vibetube-theme';
@@ -88,4 +92,7 @@ export const useUIStore = create<UIStore>((set) => ({
       window.localStorage.setItem(THEME_STORAGE_KEY, theme);
     }
   },
+
+  vibetubeBackgroundImageData: '',
+  setVibetubeBackgroundImageData: (data) => set({ vibetubeBackgroundImageData: data }),
 }));

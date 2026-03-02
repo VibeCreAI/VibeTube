@@ -7,39 +7,49 @@ import {
   useSensor,
   useSensors,
 } from '@dnd-kit/core';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   arrayMove,
   SortableContext,
   sortableKeyboardCoordinates,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
-import { Download, Plus } from 'lucide-react';
+import { Clapperboard, Download, Plus, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { useToast } from '@/components/ui/use-toast';
+import { apiClient } from '@/lib/api/client';
+import type { VibeTubeJobResponse } from '@/lib/api/types';
 import { useHistory } from '@/lib/hooks/useHistory';
 import {
   useAddStoryItem,
   useExportStoryAudio,
   useRemoveStoryItem,
+  useRenderStoryVibeTube,
   useReorderStoryItems,
   useStory,
 } from '@/lib/hooks/useStories';
+import { getPersistedVibeTubeRenderSettings } from '@/lib/utils/vibetubeSettings';
+import { loadPersistedVibeTubeBackgroundImageData } from '@/lib/utils/vibetubeSettings';
 import { useStoryPlayback } from '@/lib/hooks/useStoryPlayback';
 import { useStoryStore } from '@/stores/storyStore';
 import { SortableStoryChatItem } from './StoryChatItem';
 
 export function StoryContent() {
+  const queryClient = useQueryClient();
   const selectedStoryId = useStoryStore((state) => state.selectedStoryId);
   const { data: story, isLoading } = useStory(selectedStoryId);
   const removeItem = useRemoveStoryItem();
   const reorderItems = useReorderStoryItems();
   const exportAudio = useExportStoryAudio();
+  const renderStoryVibeTube = useRenderStoryVibeTube();
   const addStoryItem = useAddStoryItem();
   const { toast } = useToast();
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [selectedStoryJobId, setSelectedStoryJobId] = useState<string | null>(null);
+  const [isDeletingStoryRender, setIsDeletingStoryRender] = useState(false);
 
   // Add generation popover state
   const [searchQuery, setSearchQuery] = useState('');
@@ -54,10 +64,36 @@ export function StoryContent() {
     return historyData.items.filter(
       (gen) =>
         !storyGenerationIds.has(gen.id) &&
-        (gen.text.toLowerCase().includes(query) ||
-          gen.profile_name.toLowerCase().includes(query)),
+        (gen.text.toLowerCase().includes(query) || gen.profile_name.toLowerCase().includes(query)),
     );
   }, [historyData, story, searchQuery]);
+
+  const storyJobsQuery = useQuery({
+    queryKey: ['vibetube-jobs', story?.id],
+    enabled: !!story?.id,
+    queryFn: async () => {
+      const jobs = await apiClient.listVibeTubeJobs();
+      return jobs.filter((job) => job.source_story_id === story?.id);
+    },
+  });
+
+  const storyJobs = storyJobsQuery.data ?? [];
+  const selectedStoryJob: VibeTubeJobResponse | null = useMemo(() => {
+    if (!storyJobs.length) return null;
+    const selected = storyJobs.find((job) => job.job_id === selectedStoryJobId);
+    return selected ?? storyJobs[0];
+  }, [storyJobs, selectedStoryJobId]);
+
+  useEffect(() => {
+    if (!storyJobs.length) {
+      setSelectedStoryJobId(null);
+      return;
+    }
+    const stillValid = selectedStoryJobId && storyJobs.some((job) => job.job_id === selectedStoryJobId);
+    if (!stillValid) {
+      setSelectedStoryJobId(storyJobs[0].job_id);
+    }
+  }, [storyJobs, selectedStoryJobId]);
 
   // Get track editor height from store for dynamic padding
   const trackEditorHeight = useStoryStore((state) => state.trackEditorHeight);
@@ -227,6 +263,82 @@ export function StoryContent() {
     );
   };
 
+  const handleRenderStoryVibeTube = async () => {
+    if (!story) return;
+    const settings = getPersistedVibeTubeRenderSettings();
+    const backgroundImageData = settings.use_background_image
+      ? await loadPersistedVibeTubeBackgroundImageData()
+      : '';
+    renderStoryVibeTube.mutate(
+      {
+        storyId: story.id,
+        data: {
+          ...settings,
+          background_image_data: backgroundImageData || settings.background_image_data,
+        },
+      },
+      {
+        onSuccess: (result) => {
+          toast({
+            title: 'VibeTube render started',
+            description: `Story render completed as job ${result.job_id.slice(0, 8)}.`,
+          });
+        },
+        onError: (error) => {
+          toast({
+            title: 'Failed to render story',
+            description: error.message,
+            variant: 'destructive',
+          });
+        },
+      },
+    );
+  };
+
+  const handleExportStoryRenderMp4 = async (jobId: string) => {
+    try {
+      const blob = await apiClient.exportVibeTubeMp4(jobId);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `vibetube-story-${jobId}.mp4`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      toast({ title: 'MP4 exported', description: 'Saved story render MP4.' });
+    } catch (error) {
+      toast({
+        title: 'Export failed',
+        description: error instanceof Error ? error.message : 'Unknown error',
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const handleDeleteStoryRender = async (jobId: string) => {
+    const confirmed = await confirm('Delete this story render? This removes all files for this render.');
+    if (!confirmed) return;
+
+    setIsDeletingStoryRender(true);
+    try {
+      await apiClient.deleteVibeTubeJob(jobId);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['vibetube-jobs'] }),
+        queryClient.invalidateQueries({ queryKey: ['vibetube-jobs', story?.id] }),
+      ]);
+      toast({ title: 'Render deleted', description: 'Removed story render successfully.' });
+    } catch (error) {
+      toast({
+        title: 'Delete failed',
+        description: error instanceof Error ? error.message : 'Unknown error',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsDeletingStoryRender(false);
+    }
+  };
+
   if (!selectedStoryId) {
     return (
       <div className="flex items-center justify-center h-full text-muted-foreground">
@@ -287,9 +399,7 @@ export function StoryContent() {
               <div className="max-h-60 overflow-y-auto">
                 {availableGenerations.length === 0 ? (
                   <div className="p-4 text-center text-sm text-muted-foreground">
-                    {searchQuery
-                      ? 'No matching generations found'
-                      : 'No available generations'}
+                    {searchQuery ? 'No matching generations found' : 'No available generations'}
                   </div>
                 ) : (
                   availableGenerations.map((gen) => (
@@ -313,6 +423,17 @@ export function StoryContent() {
             <Button
               variant="outline"
               size="sm"
+              onClick={handleRenderStoryVibeTube}
+              disabled={renderStoryVibeTube.isPending}
+            >
+              <Clapperboard className="mr-2 h-4 w-4" />
+              {renderStoryVibeTube.isPending ? 'Rendering...' : 'Render VibeTube'}
+            </Button>
+          )}
+          {story.items.length > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
               onClick={handleExportAudio}
               disabled={exportAudio.isPending}
             >
@@ -329,6 +450,65 @@ export function StoryContent() {
         className="flex-1 min-h-0 overflow-y-auto space-y-3"
         style={{ paddingBottom: bottomPadding > 0 ? `${bottomPadding}px` : undefined }}
       >
+        <section className="rounded-xl border bg-card/40 p-4 space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <h3 className="text-base font-semibold">Story Video Preview</h3>
+              <p className="text-xs text-muted-foreground">Only renders generated from this story are shown here.</p>
+            </div>
+            <div className="flex items-center gap-2">
+              {selectedStoryJob && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleExportStoryRenderMp4(selectedStoryJob.job_id)}
+                >
+                  <Download className="mr-2 h-4 w-4" />
+                  Export MP4
+                </Button>
+              )}
+              {selectedStoryJob && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleDeleteStoryRender(selectedStoryJob.job_id)}
+                  disabled={isDeletingStoryRender}
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  {isDeletingStoryRender ? 'Deleting...' : 'Delete'}
+                </Button>
+              )}
+            </div>
+          </div>
+
+          {selectedStoryJob ? (
+            <div className="space-y-3">
+              <video
+                className="w-full rounded-lg border bg-black/60 max-h-[360px]"
+                controls
+                preload="metadata"
+                src={apiClient.getVibeTubePreviewUrl(selectedStoryJob.job_id)}
+              />
+              {storyJobs.length > 1 && (
+                <div className="flex gap-2 overflow-x-auto pb-1">
+                  {storyJobs.map((job) => (
+                    <Button
+                      key={job.job_id}
+                      variant={job.job_id === selectedStoryJob.job_id ? 'default' : 'outline'}
+                      size="sm"
+                      onClick={() => setSelectedStoryJobId(job.job_id)}
+                    >
+                      {new Date(job.created_at).toLocaleString()}
+                    </Button>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="text-sm text-muted-foreground">No story render yet. Click "Render VibeTube" above.</div>
+          )}
+        </section>
+
         {sortedItems.length === 0 ? (
           <div className="text-center py-12 px-5 border-2 border-dashed border-muted rounded-md text-muted-foreground">
             <p className="text-sm">No items in this story</p>

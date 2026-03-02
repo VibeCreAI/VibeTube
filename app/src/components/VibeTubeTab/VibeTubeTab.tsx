@@ -23,6 +23,14 @@ import { apiClient } from '@/lib/api/client';
 import type { VibeTubeJobResponse, VibeTubeRenderResponse } from '@/lib/api/types';
 import { useHistory } from '@/lib/hooks/useHistory';
 import { useProfiles } from '@/lib/hooks/useProfiles';
+import {
+  getPersistedVibeTubeBackgroundImageData,
+  getPersistedVibeTubeBackgroundImageFileAsync,
+  loadPersistedVibeTubeBackgroundImageData,
+  setPersistedVibeTubeBackgroundImageData,
+  VIBETUBE_SETTING_KEYS,
+} from '@/lib/utils/vibetubeSettings';
+import { useUIStore } from '@/stores/uiStore';
 
 const LANGUAGE_OPTIONS = [
   { value: 'en', label: 'English' },
@@ -126,19 +134,40 @@ export function VibeTubeTab() {
   const [generationId, setGenerationId] = useState('');
   const [text, setText] = useState('');
 
-  const [fps, setFps] = usePersistedNumber('vibetube.settings.fps', 30);
-  const [width, setWidth] = usePersistedNumber('vibetube.settings.width', 512);
-  const [height, setHeight] = usePersistedNumber('vibetube.settings.height', 512);
-  const [onThreshold, setOnThreshold] = usePersistedNumber('vibetube.settings.onThreshold', 0.024);
-  const [offThreshold, setOffThreshold] = usePersistedNumber('vibetube.settings.offThreshold', 0.016);
-  const [smoothingWindows, setSmoothingWindows] = usePersistedNumber('vibetube.settings.smoothingWindows', 3);
-  const [minHoldWindows, setMinHoldWindows] = usePersistedNumber('vibetube.settings.minHoldWindows', 1);
-  const [blinkMinIntervalSec, setBlinkMinIntervalSec] = usePersistedNumber('vibetube.settings.blinkMinIntervalSec', 3.5);
-  const [blinkMaxIntervalSec, setBlinkMaxIntervalSec] = usePersistedNumber('vibetube.settings.blinkMaxIntervalSec', 5.5);
-  const [blinkDurationFrames, setBlinkDurationFrames] = usePersistedNumber('vibetube.settings.blinkDurationFrames', 3);
-  const [headMotionAmountPx, setHeadMotionAmountPx] = usePersistedNumber('vibetube.settings.headMotionAmountPx', 3.0);
-  const [headMotionChangeSec, setHeadMotionChangeSec] = usePersistedNumber('vibetube.settings.headMotionChangeSec', 2.8);
-  const [headMotionSmoothness, setHeadMotionSmoothness] = usePersistedNumber('vibetube.settings.headMotionSmoothness', 0.04);
+  const [fps, setFps] = usePersistedNumber(VIBETUBE_SETTING_KEYS.fps, 30);
+  const [width, setWidth] = usePersistedNumber(VIBETUBE_SETTING_KEYS.width, 512);
+  const [height, setHeight] = usePersistedNumber(VIBETUBE_SETTING_KEYS.height, 512);
+  const [onThreshold, setOnThreshold] = usePersistedNumber(VIBETUBE_SETTING_KEYS.onThreshold, 0.024);
+  const [offThreshold, setOffThreshold] = usePersistedNumber(VIBETUBE_SETTING_KEYS.offThreshold, 0.016);
+  const [smoothingWindows, setSmoothingWindows] = usePersistedNumber(VIBETUBE_SETTING_KEYS.smoothingWindows, 3);
+  const [minHoldWindows, setMinHoldWindows] = usePersistedNumber(VIBETUBE_SETTING_KEYS.minHoldWindows, 1);
+  const [blinkMinIntervalSec, setBlinkMinIntervalSec] = usePersistedNumber(VIBETUBE_SETTING_KEYS.blinkMinIntervalSec, 3.5);
+  const [blinkMaxIntervalSec, setBlinkMaxIntervalSec] = usePersistedNumber(VIBETUBE_SETTING_KEYS.blinkMaxIntervalSec, 5.5);
+  const [blinkDurationFrames, setBlinkDurationFrames] = usePersistedNumber(VIBETUBE_SETTING_KEYS.blinkDurationFrames, 3);
+  const [headMotionAmountPx, setHeadMotionAmountPx] = usePersistedNumber(VIBETUBE_SETTING_KEYS.headMotionAmountPx, 3.0);
+  const [headMotionChangeSec, setHeadMotionChangeSec] = usePersistedNumber(VIBETUBE_SETTING_KEYS.headMotionChangeSec, 2.8);
+  const [headMotionSmoothness, setHeadMotionSmoothness] = usePersistedNumber(VIBETUBE_SETTING_KEYS.headMotionSmoothness, 0.04);
+  const [voiceBounceAmountPx, setVoiceBounceAmountPx] = usePersistedNumber(VIBETUBE_SETTING_KEYS.voiceBounceAmountPx, 4.0);
+  const [voiceBounceSensitivity, setVoiceBounceSensitivity] = usePersistedNumber(
+    VIBETUBE_SETTING_KEYS.voiceBounceSensitivity,
+    1.0,
+  );
+  const [useBackgroundColor, setUseBackgroundColor] = usePersistedBoolean(
+    VIBETUBE_SETTING_KEYS.useBackgroundColor,
+    false,
+  );
+  const [useBackgroundImage, setUseBackgroundImage] = usePersistedBoolean(
+    VIBETUBE_SETTING_KEYS.useBackgroundImage,
+    false,
+  );
+  const [backgroundColor, setBackgroundColor] = usePersistedString(
+    VIBETUBE_SETTING_KEYS.backgroundColor,
+    '#101820',
+  );
+  const [backgroundImageFile, setBackgroundImageFile] = useState<File | null>(null);
+  const [backgroundImagePreview, setBackgroundImagePreview] = useState<string | null>(null);
+  const sharedBackgroundImageData = useUIStore((state) => state.vibetubeBackgroundImageData);
+  const setSharedBackgroundImageData = useUIStore((state) => state.setVibetubeBackgroundImageData);
 
   const [avatarFiles, setAvatarFiles] = useState<AvatarFiles>({
     idle: null,
@@ -233,6 +262,27 @@ export function VibeTubeTab() {
   }, [generationId, historyItems]);
 
   useEffect(() => {
+    let cancelled = false;
+    const loadBackground = async () => {
+      const persistedBg =
+        sharedBackgroundImageData ||
+        getPersistedVibeTubeBackgroundImageData() ||
+        (await loadPersistedVibeTubeBackgroundImageData());
+      if (cancelled || !persistedBg) return;
+      setBackgroundImagePreview(persistedBg);
+      try {
+        setBackgroundImageFile(dataUrlToFile(persistedBg, 'vibetube-background.png'));
+      } catch {
+        setBackgroundImageFile(null);
+      }
+    };
+    void loadBackground();
+    return () => {
+      cancelled = true;
+    };
+  }, [sharedBackgroundImageData]);
+
+  useEffect(() => {
     return () => {
       Object.values(avatarPreviews).forEach((url) => {
         if (url?.startsWith('blob:')) {
@@ -240,7 +290,7 @@ export function VibeTubeTab() {
         }
       });
     };
-  }, [avatarPreviews]);
+  }, [avatarPreviews, backgroundImagePreview]);
 
   useEffect(() => {
     if (!profileId) {
@@ -345,6 +395,10 @@ export function VibeTubeTab() {
 
     setIsRendering(true);
     try {
+      const backgroundImageForRender = useBackgroundImage
+        ? await getPersistedVibeTubeBackgroundImageFileAsync()
+        : undefined;
+
       const response = await apiClient.renderVibeTube({
         profile_id: profileId,
         language,
@@ -363,6 +417,13 @@ export function VibeTubeTab() {
         head_motion_amount_px: headMotionAmountPx,
         head_motion_change_sec: headMotionChangeSec,
         head_motion_smoothness: headMotionSmoothness,
+        voice_bounce_amount_px: voiceBounceAmountPx,
+        voice_bounce_sensitivity: voiceBounceSensitivity,
+        use_background_color: useBackgroundColor,
+        use_background_image: useBackgroundImage,
+        use_background: useBackgroundColor || useBackgroundImage,
+        background_color: useBackgroundColor ? backgroundColor : undefined,
+        background_image: useBackgroundImage ? backgroundImageForRender || backgroundImageFile || undefined : undefined,
         idle: avatarFiles.idle || undefined,
         talk: avatarFiles.talk || undefined,
         idle_blink: avatarFiles.idle_blink || undefined,
@@ -779,10 +840,133 @@ export function VibeTubeTab() {
                 step={0.005}
                 onChange={setHeadMotionSmoothness}
               />
+              <DecimalField
+                label="Voice Bounce (px)"
+                description="Maximum up/down bounce amount driven by speech energy."
+                value={voiceBounceAmountPx}
+                min={0}
+                max={40}
+                step={0.25}
+                onChange={setVoiceBounceAmountPx}
+              />
+              <DecimalField
+                label="Bounce Sensitivity"
+                description="How strongly speech energy drives bounce. Higher values react more."
+                value={voiceBounceSensitivity}
+                min={0.05}
+                max={8}
+                step={0.05}
+                onChange={setVoiceBounceSensitivity}
+              />
+              <div className="space-y-1.5 col-span-2 lg:col-span-2">
+                <div className="flex flex-wrap items-center gap-4">
+                  <Label className="flex items-center gap-2">
+                    <Checkbox
+                      checked={useBackgroundColor}
+                      onCheckedChange={(checked) => {
+                        const isOn = checked === true;
+                        setUseBackgroundColor(isOn);
+                        if (isOn) {
+                          setUseBackgroundImage(false);
+                        }
+                      }}
+                    />
+                    <span>Add Background Color</span>
+                    <span
+                      title="Enable a solid color background."
+                      className="inline-flex text-muted-foreground cursor-help"
+                    >
+                      <Info className="h-3.5 w-3.5" />
+                    </span>
+                  </Label>
+                  <Label className="flex items-center gap-2">
+                    <Checkbox
+                      checked={useBackgroundImage}
+                      onCheckedChange={(checked) => {
+                        const isOn = checked === true;
+                        setUseBackgroundImage(isOn);
+                        if (isOn) {
+                          setUseBackgroundColor(false);
+                        }
+                      }}
+                    />
+                    <span>Add Background Image</span>
+                    <span
+                      title="Enable uploaded image/GIF background."
+                      className="inline-flex text-muted-foreground cursor-help"
+                    >
+                      <Info className="h-3.5 w-3.5" />
+                    </span>
+                  </Label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="color"
+                    value={backgroundColor}
+                    onChange={(e) => setBackgroundColor(e.target.value)}
+                    className="h-10 w-16 p-1"
+                    disabled={!useBackgroundColor}
+                  />
+                  <Input
+                    value={backgroundColor}
+                    onChange={(e) => setBackgroundColor(e.target.value)}
+                    placeholder="#101820"
+                    disabled={!useBackgroundColor}
+                    className="max-w-[140px]"
+                  />
+                </div>
+                <div className="space-y-2 pt-1">
+                  <Label className="text-xs text-muted-foreground">Background Image</Label>
+                  <Input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/gif"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0] ?? null;
+                      setBackgroundImageFile(file);
+                      if (file) {
+                        const dataUrl = await fileToDataUrl(file);
+                        setBackgroundImagePreview(dataUrl);
+                        setSharedBackgroundImageData(dataUrl);
+                        setPersistedVibeTubeBackgroundImageData(dataUrl);
+                      } else {
+                        setBackgroundImagePreview(null);
+                        setSharedBackgroundImageData('');
+                        setPersistedVibeTubeBackgroundImageData('');
+                      }
+                    }}
+                    disabled={!useBackgroundImage}
+                  />
+                  {backgroundImagePreview ? (
+                    <div className="flex items-center gap-2">
+                      <div className="h-16 w-24 rounded border bg-black/30 overflow-hidden">
+                        <img
+                          src={backgroundImagePreview}
+                          alt="Background preview"
+                          className="h-full w-full object-cover"
+                        />
+                      </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          setBackgroundImageFile(null);
+                          setBackgroundImagePreview(null);
+                          setSharedBackgroundImageData('');
+                          setPersistedVibeTubeBackgroundImageData('');
+                        }}
+                        disabled={!useBackgroundImage}
+                      >
+                        Clear
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
             </div>
             <p className="text-xs text-muted-foreground">
               Lower ON/OFF thresholds make mouth opening more sensitive. Lower blink intervals increase blink frequency.
-              Lower head change/smooth settings create slower, subtler motion.
+              Lower head change/smooth settings create slower, subtler motion. Increase bounce amount/sensitivity for more reactive PNGtuber motion.
             </p>
           </section>
 
@@ -1010,4 +1194,65 @@ function usePersistedNumber(storageKey: string, defaultValue: number) {
   }, [storageKey, value]);
 
   return [value, setValue] as const;
+}
+
+function usePersistedBoolean(storageKey: string, defaultValue: boolean) {
+  const [value, setValue] = useState<boolean>(() => {
+    if (typeof window === 'undefined') {
+      return defaultValue;
+    }
+    const raw = window.localStorage.getItem(storageKey);
+    if (raw == null) {
+      return defaultValue;
+    }
+    if (raw === 'true') return true;
+    if (raw === 'false') return false;
+    return defaultValue;
+  });
+
+  useEffect(() => {
+    window.localStorage.setItem(storageKey, String(value));
+  }, [storageKey, value]);
+
+  return [value, setValue] as const;
+}
+
+function usePersistedString(storageKey: string, defaultValue: string) {
+  const [value, setValue] = useState<string>(() => {
+    if (typeof window === 'undefined') {
+      return defaultValue;
+    }
+    return window.localStorage.getItem(storageKey) ?? defaultValue;
+  });
+
+  useEffect(() => {
+    window.localStorage.setItem(storageKey, value);
+  }, [storageKey, value]);
+
+  return [value, setValue] as const;
+}
+
+async function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ''));
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function dataUrlToFile(dataUrl: string, fileName: string): File {
+  const match = dataUrl.match(/^data:(.+);base64,(.+)$/);
+  if (!match) {
+    throw new Error('Invalid data URL');
+  }
+  const mime = match[1];
+  const b64 = match[2];
+  const binary = atob(b64);
+  const len = binary.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return new File([bytes], fileName, { type: mime });
 }

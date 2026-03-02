@@ -94,6 +94,49 @@ export async function convertToWav(audioBlob: Blob): Promise<Blob> {
 }
 
 /**
+ * Apply gain (in dB) to an audio file and return a WAV file.
+ * Useful when recorded input is too quiet for voice profile creation.
+ */
+export async function applyGainToAudioFile(file: File, gainDb: number): Promise<File> {
+  // No-op fast path
+  if (!Number.isFinite(gainDb) || Math.abs(gainDb) < 0.001) {
+    return file;
+  }
+
+  const audioContext = new AudioContext();
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+    // Create a writable copy of the decoded audio
+    const out = audioContext.createBuffer(
+      audioBuffer.numberOfChannels,
+      audioBuffer.length,
+      audioBuffer.sampleRate,
+    );
+
+    const linearGain = Math.pow(10, gainDb / 20);
+    for (let ch = 0; ch < audioBuffer.numberOfChannels; ch++) {
+      const src = audioBuffer.getChannelData(ch);
+      const dst = out.getChannelData(ch);
+      for (let i = 0; i < src.length; i++) {
+        const s = src[i] * linearGain;
+        // Hard clamp to avoid overflow/clipping artifacts beyond [-1, 1]
+        dst[i] = Math.max(-1, Math.min(1, s));
+      }
+    }
+
+    const wavBlob = audioBufferToWav(out);
+    const wavName = file.name.toLowerCase().endsWith('.wav')
+      ? file.name
+      : file.name.replace(/\.[^.]+$/, '.wav');
+    return new File([wavBlob], wavName, { type: 'audio/wav' });
+  } finally {
+    await audioContext.close();
+  }
+}
+
+/**
  * Convert AudioBuffer to WAV blob.
  */
 function audioBufferToWav(buffer: AudioBuffer): Blob {

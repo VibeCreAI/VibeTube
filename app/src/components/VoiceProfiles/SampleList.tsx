@@ -14,7 +14,12 @@ import { Slider } from '@/components/ui/slider';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
 import { apiClient } from '@/lib/api/client';
-import { useDeleteSample, useProfileSamples, useUpdateSample } from '@/lib/hooks/useProfiles';
+import {
+  useDeleteSample,
+  useProfileSamples,
+  useUpdateSample,
+  useUpdateSampleGain,
+} from '@/lib/hooks/useProfiles';
 import { formatAudioDuration } from '@/lib/utils/audio';
 import { cn } from '@/lib/utils/cn';
 import { SampleUpload } from './SampleUpload';
@@ -144,12 +149,28 @@ export function SampleList({ profileId }: SampleListProps) {
   const { data: samples, isLoading } = useProfileSamples(profileId);
   const deleteSample = useDeleteSample();
   const updateSample = useUpdateSample();
+  const updateSampleGain = useUpdateSampleGain();
   const { toast } = useToast();
   const [uploadOpen, setUploadOpen] = useState(false);
   const [editingSampleId, setEditingSampleId] = useState<string | null>(null);
   const [editedText, setEditedText] = useState<string>('');
+  const [gainDrafts, setGainDrafts] = useState<Record<string, number>>({});
+  const [audioCacheBust, setAudioCacheBust] = useState<Record<string, number>>({});
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [sampleToDelete, setSampleToDelete] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!samples) return;
+    setGainDrafts((prev) => {
+      const next = { ...prev };
+      for (const sample of samples) {
+        if (!(sample.id in next)) {
+          next[sample.id] = 0;
+        }
+      }
+      return next;
+    });
+  }, [samples]);
 
   const handleDeleteClick = (sampleId: string) => {
     setSampleToDelete(sampleId);
@@ -196,6 +217,28 @@ export function SampleList({ profileId }: SampleListProps) {
       toast({
         title: 'Update failed',
         description: error instanceof Error ? error.message : 'Failed to update sample',
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const handleGainDraftChange = (sampleId: string, gainDb: number) => {
+    setGainDrafts((prev) => ({ ...prev, [sampleId]: gainDb }));
+  };
+
+  const handleApplyGain = async (sampleId: string) => {
+    const gainDb = gainDrafts[sampleId] ?? 0;
+    try {
+      await updateSampleGain.mutateAsync({ sampleId, gainDb });
+      setAudioCacheBust((prev) => ({ ...prev, [sampleId]: Date.now() }));
+      toast({
+        title: 'Sample volume updated',
+        description: `Applied ${gainDb.toFixed(1)} dB to this sample.`,
+      });
+    } catch (error) {
+      toast({
+        title: 'Volume update failed',
+        description: error instanceof Error ? error.message : 'Failed to update sample volume',
         variant: 'destructive',
       });
     }
@@ -297,7 +340,51 @@ export function SampleList({ profileId }: SampleListProps) {
                     </div>
 
                     {/* Mini Player - Always visible */}
-                    <MiniSamplePlayer audioUrl={apiClient.getSampleUrl(sample.id)} />
+                    <MiniSamplePlayer
+                      audioUrl={`${apiClient.getSampleUrl(sample.id)}?v=${audioCacheBust[sample.id] ?? 0}`}
+                    />
+
+                    <div className="border-t px-3 py-2 bg-muted/20">
+                      <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                        <div className="text-xs text-muted-foreground min-w-[132px]">
+                          Sample Gain (dB)
+                        </div>
+                        <div className="flex-1 flex items-center gap-2">
+                          <Slider
+                            value={[gainDrafts[sample.id] ?? 0]}
+                            min={-18}
+                            max={18}
+                            step={0.5}
+                            onValueChange={(value) => handleGainDraftChange(sample.id, value[0] ?? 0)}
+                            disabled={updateSampleGain.isPending}
+                          />
+                          <input
+                            type="number"
+                            min={-18}
+                            max={18}
+                            step={0.5}
+                            className="w-20 h-8 rounded border bg-background px-2 text-xs"
+                            value={(gainDrafts[sample.id] ?? 0).toFixed(1)}
+                            onChange={(e) => {
+                              const parsed = Number(e.target.value);
+                              if (Number.isNaN(parsed)) return;
+                              const clamped = Math.max(-18, Math.min(18, parsed));
+                              handleGainDraftChange(sample.id, clamped);
+                            }}
+                            disabled={updateSampleGain.isPending}
+                          />
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => handleApplyGain(sample.id)}
+                            disabled={updateSampleGain.isPending}
+                          >
+                            {updateSampleGain.isPending ? 'Applying...' : 'Apply'}
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
                   </>
                 )}
               </div>

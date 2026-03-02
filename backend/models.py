@@ -38,6 +38,11 @@ class ProfileSampleUpdate(BaseModel):
     reference_text: str = Field(..., min_length=1, max_length=1000)
 
 
+class ProfileSampleGainUpdate(BaseModel):
+    """Request model for applying gain to a profile sample."""
+    gain_db: float = Field(..., ge=-30.0, le=30.0)
+
+
 class ProfileSampleResponse(BaseModel):
     """Response model for profile sample."""
     id: str
@@ -85,6 +90,7 @@ class VibeTubeRenderResponse(BaseModel):
     meta_path: str
     duration: float
     source_generation_id: Optional[str] = None
+    source_story_id: Optional[str] = None
 
 
 class VibeTubeAvatarPackResponse(BaseModel):
@@ -104,14 +110,41 @@ class VibeTubeJobResponse(BaseModel):
     duration_sec: Optional[float] = None
     video_path: Optional[str] = None
     source_generation_id: Optional[str] = None
+    source_story_id: Optional[str] = None
+    source_story_name: Optional[str] = None
     source_profile_name: Optional[str] = None
     source_text_preview: Optional[str] = None
+
+
+class StoryVibeTubeRenderRequest(BaseModel):
+    """Request model for rendering a full story with VibeTube avatars."""
+    fps: int = Field(default=30, ge=1, le=120)
+    width: int = Field(default=512, ge=64, le=4096)
+    height: int = Field(default=512, ge=64, le=4096)
+    on_threshold: float = Field(default=0.024, ge=0.001, le=0.5)
+    off_threshold: float = Field(default=0.016, ge=0.001, le=0.5)
+    smoothing_windows: int = Field(default=3, ge=1, le=20)
+    min_hold_windows: int = Field(default=1, ge=1, le=20)
+    blink_min_interval_sec: float = Field(default=3.5, ge=0.2, le=60.0)
+    blink_max_interval_sec: float = Field(default=5.5, ge=0.2, le=60.0)
+    blink_duration_frames: int = Field(default=3, ge=1, le=30)
+    head_motion_amount_px: float = Field(default=3.0, ge=0.0, le=100.0)
+    head_motion_change_sec: float = Field(default=2.8, ge=0.1, le=60.0)
+    head_motion_smoothness: float = Field(default=0.04, ge=0.001, le=1.0)
+    voice_bounce_amount_px: float = Field(default=4.0, ge=0.0, le=100.0)
+    voice_bounce_sensitivity: float = Field(default=1.0, ge=0.05, le=8.0)
+    use_background_color: bool = False
+    use_background_image: bool = False
+    use_background: bool = False
+    background_color: Optional[str] = Field(default="#101820")
+    background_image_data: Optional[str] = None
 
 
 class HistoryQuery(BaseModel):
     """Query model for generation history."""
     profile_id: Optional[str] = None
     search: Optional[str] = None
+    exclude_story_generations: bool = False
     limit: int = Field(default=50, ge=1, le=1000)
     offset: int = Field(default=0, ge=0)
 

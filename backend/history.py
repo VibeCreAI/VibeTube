@@ -11,7 +11,11 @@ from sqlalchemy.orm import Session
 from sqlalchemy import or_
 
 from .models import GenerationRequest, GenerationResponse, HistoryQuery, HistoryResponse, HistoryListResponse
-from .database import Generation as DBGeneration, VoiceProfile as DBVoiceProfile
+from .database import (
+    Generation as DBGeneration,
+    VoiceProfile as DBVoiceProfile,
+    StoryItem as DBStoryItem,
+)
 from . import config
 
 
@@ -117,6 +121,12 @@ async def list_generations(
     if query.search:
         search_pattern = f"%{query.search}%"
         q = q.filter(DBGeneration.text.like(search_pattern))
+
+    # Optionally exclude generations already used in any story.
+    if query.exclude_story_generations:
+        q = q.outerjoin(DBStoryItem, DBStoryItem.generation_id == DBGeneration.id).filter(
+            DBStoryItem.id.is_(None)
+        )
     
     # Get total count before pagination
     total_count = q.count()

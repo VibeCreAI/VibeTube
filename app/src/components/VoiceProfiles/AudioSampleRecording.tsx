@@ -2,8 +2,10 @@ import { Mic, Pause, Play, Square } from 'lucide-react';
 import { memo, useEffect, useState } from 'react';
 import { Visualizer } from 'react-sound-visualizer';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { FormControl, FormItem, FormMessage } from '@/components/ui/form';
 import { formatAudioDuration } from '@/lib/utils/audio';
+import type { AudioProcessingOptions } from '@/lib/hooks/useAudioRecording';
 
 const MemoizedWaveform = memo(function MemoizedWaveform({
   audioStream,
@@ -38,6 +40,8 @@ interface AudioSampleRecordingProps {
   isPlaying: boolean;
   isTranscribing?: boolean;
   showWaveform?: boolean;
+  audioProcessing: AudioProcessingOptions;
+  onAudioProcessingChange: (next: AudioProcessingOptions) => void;
 }
 
 export function AudioSampleRecording({
@@ -52,6 +56,8 @@ export function AudioSampleRecording({
   isPlaying,
   isTranscribing = false,
   showWaveform = true,
+  audioProcessing,
+  onAudioProcessingChange,
 }: AudioSampleRecordingProps) {
   const [audioStream, setAudioStream] = useState<MediaStream | null>(null);
 
@@ -99,6 +105,44 @@ export function AudioSampleRecording({
                 <Mic className="h-5 w-5" />
                 Start Recording
               </Button>
+              <div className="relative z-10 grid grid-cols-1 sm:grid-cols-3 gap-2 w-full max-w-xl">
+                <label className="flex items-center gap-2 px-3 py-1.5 rounded-md border bg-card/80 text-xs">
+                  <Checkbox
+                    checked={audioProcessing.autoGainControl}
+                    onCheckedChange={(checked) =>
+                      onAudioProcessingChange({
+                        ...audioProcessing,
+                        autoGainControl: checked,
+                      })
+                    }
+                  />
+                  Auto Gain
+                </label>
+                <label className="flex items-center gap-2 px-3 py-1.5 rounded-md border bg-card/80 text-xs">
+                  <Checkbox
+                    checked={audioProcessing.noiseSuppression}
+                    onCheckedChange={(checked) =>
+                      onAudioProcessingChange({
+                        ...audioProcessing,
+                        noiseSuppression: checked,
+                      })
+                    }
+                  />
+                  Noise Suppression
+                </label>
+                <label className="flex items-center gap-2 px-3 py-1.5 rounded-md border bg-card/80 text-xs">
+                  <Checkbox
+                    checked={audioProcessing.echoCancellation}
+                    onCheckedChange={(checked) =>
+                      onAudioProcessingChange({
+                        ...audioProcessing,
+                        echoCancellation: checked,
+                      })
+                    }
+                  />
+                  Echo Cancellation
+                </label>
+              </div>
               <p className="relative z-10 text-sm text-muted-foreground text-center">
                 Click to start recording. Maximum duration: 30 seconds.
               </p>

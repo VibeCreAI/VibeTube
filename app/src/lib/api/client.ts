@@ -1,33 +1,34 @@
-import { useServerStore } from '@/stores/serverStore';
 import type { LanguageCode } from '@/lib/constants/languages';
+import { useServerStore } from '@/stores/serverStore';
 import type {
-  VoiceProfileCreate,
-  VoiceProfileResponse,
-  ProfileSampleResponse,
+  ActiveTasksResponse,
   GenerationRequest,
   GenerationResponse,
-  HistoryQuery,
-  HistoryListResponse,
-  HistoryResponse,
-  TranscriptionResponse,
   HealthResponse,
-  ModelStatusListResponse,
+  HistoryListResponse,
+  HistoryQuery,
+  HistoryResponse,
   ModelDownloadRequest,
-  ActiveTasksResponse,
+  ModelStatusListResponse,
+  ProfileSampleResponse,
   StoryCreate,
-  StoryResponse,
   StoryDetailResponse,
+  StoryItemBatchUpdate,
   StoryItemCreate,
   StoryItemDetail,
-  StoryItemBatchUpdate,
-  StoryItemReorder,
   StoryItemMove,
-  StoryItemTrim,
+  StoryItemReorder,
   StoryItemSplit,
-  VibeTubeRenderRequest,
+  StoryItemTrim,
+  StoryResponse,
+  StoryVibeTubeRenderRequest,
+  TranscriptionResponse,
   VibeTubeAvatarPackResponse,
   VibeTubeJobResponse,
+  VibeTubeRenderRequest,
   VibeTubeRenderResponse,
+  VoiceProfileCreate,
+  VoiceProfileResponse,
 } from './types';
 
 class ApiClient {
@@ -69,8 +70,14 @@ class ApiClient {
     });
   }
 
-  async listProfiles(): Promise<VoiceProfileResponse[]> {
-    return this.request<VoiceProfileResponse[]>('/profiles');
+  async listProfiles(query?: { exclude_story_only?: boolean }): Promise<VoiceProfileResponse[]> {
+    const params = new URLSearchParams();
+    if (query?.exclude_story_only !== undefined) {
+      params.append('exclude_story_only', String(query.exclude_story_only));
+    }
+    const queryString = params.toString();
+    const endpoint = queryString ? `/profiles?${queryString}` : '/profiles';
+    return this.request<VoiceProfileResponse[]>(endpoint);
   }
 
   async getProfile(profileId: string): Promise<VoiceProfileResponse> {
@@ -132,6 +139,13 @@ class ApiClient {
     return this.request<ProfileSampleResponse>(`/profiles/samples/${sampleId}`, {
       method: 'PUT',
       body: JSON.stringify({ reference_text: referenceText }),
+    });
+  }
+
+  async updateProfileSampleGain(sampleId: string, gainDb: number): Promise<ProfileSampleResponse> {
+    return this.request<ProfileSampleResponse>(`/profiles/samples/${sampleId}/gain`, {
+      method: 'PUT',
+      body: JSON.stringify({ gain_db: gainDb }),
     });
   }
 
@@ -208,6 +222,9 @@ class ApiClient {
     const params = new URLSearchParams();
     if (query?.profile_id) params.append('profile_id', query.profile_id);
     if (query?.search) params.append('search', query.search);
+    if (query?.exclude_story_generations !== undefined) {
+      params.append('exclude_story_generations', String(query.exclude_story_generations));
+    }
     if (query?.limit) params.append('limit', query.limit.toString());
     if (query?.offset) params.append('offset', query.offset.toString());
 
@@ -255,7 +272,15 @@ class ApiClient {
     return response.blob();
   }
 
-  async importGeneration(file: File): Promise<{ id: string; profile_id: string; profile_name: string; text: string; message: string }> {
+  async importGeneration(
+    file: File,
+  ): Promise<{
+    id: string;
+    profile_id: string;
+    profile_name: string;
+    text: string;
+    message: string;
+  }> {
     const url = `${this.getBaseUrl()}/history/import`;
     const formData = new FormData();
     formData.append('file', file);
@@ -314,7 +339,12 @@ class ApiClient {
   }
 
   async triggerModelDownload(modelName: string): Promise<{ message: string }> {
-    console.log('[API] triggerModelDownload called for:', modelName, 'at', new Date().toISOString());
+    console.log(
+      '[API] triggerModelDownload called for:',
+      modelName,
+      'at',
+      new Date().toISOString(),
+    );
     const result = await this.request<{ message: string }>('/models/download', {
       method: 'POST',
       body: JSON.stringify({ model_name: modelName } as ModelDownloadRequest),
@@ -347,10 +377,7 @@ class ApiClient {
     return this.request('/channels');
   }
 
-  async createChannel(data: {
-    name: string;
-    device_ids: string[];
-  }): Promise<{
+  async createChannel(data: { name: string; device_ids: string[] }): Promise<{
     id: string;
     name: string;
     is_default: boolean;
@@ -392,10 +419,7 @@ class ApiClient {
     return this.request(`/channels/${channelId}/voices`);
   }
 
-  async setChannelVoices(
-    channelId: string,
-    profileIds: string[],
-  ): Promise<{ message: string }> {
+  async setChannelVoices(channelId: string, profileIds: string[]): Promise<{ message: string }> {
     return this.request(`/channels/${channelId}/voices`, {
       method: 'PUT',
       body: JSON.stringify({ profile_ids: profileIds }),
@@ -406,10 +430,7 @@ class ApiClient {
     return this.request(`/profiles/${profileId}/channels`);
   }
 
-  async setProfileChannels(
-    profileId: string,
-    channelIds: string[],
-  ): Promise<{ message: string }> {
+  async setProfileChannels(profileId: string, channelIds: string[]): Promise<{ message: string }> {
     return this.request(`/profiles/${profileId}/channels`, {
       method: 'PUT',
       body: JSON.stringify({ channel_ids: channelIds }),
@@ -472,21 +493,33 @@ class ApiClient {
     });
   }
 
-  async moveStoryItem(storyId: string, itemId: string, data: StoryItemMove): Promise<StoryItemDetail> {
+  async moveStoryItem(
+    storyId: string,
+    itemId: string,
+    data: StoryItemMove,
+  ): Promise<StoryItemDetail> {
     return this.request<StoryItemDetail>(`/stories/${storyId}/items/${itemId}/move`, {
       method: 'PUT',
       body: JSON.stringify(data),
     });
   }
 
-  async trimStoryItem(storyId: string, itemId: string, data: StoryItemTrim): Promise<StoryItemDetail> {
+  async trimStoryItem(
+    storyId: string,
+    itemId: string,
+    data: StoryItemTrim,
+  ): Promise<StoryItemDetail> {
     return this.request<StoryItemDetail>(`/stories/${storyId}/items/${itemId}/trim`, {
       method: 'PUT',
       body: JSON.stringify(data),
     });
   }
 
-  async splitStoryItem(storyId: string, itemId: string, data: StoryItemSplit): Promise<StoryItemDetail[]> {
+  async splitStoryItem(
+    storyId: string,
+    itemId: string,
+    data: StoryItemSplit,
+  ): Promise<StoryItemDetail[]> {
     return this.request<StoryItemDetail[]>(`/stories/${storyId}/items/${itemId}/split`, {
       method: 'POST',
       body: JSON.stringify(data),
@@ -513,6 +546,16 @@ class ApiClient {
     return response.blob();
   }
 
+  async renderStoryVibeTube(
+    storyId: string,
+    data: StoryVibeTubeRenderRequest = {},
+  ): Promise<VibeTubeRenderResponse> {
+    return this.request<VibeTubeRenderResponse>(`/stories/${storyId}/render-vibetube`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
   async renderVibeTube(data: VibeTubeRenderRequest): Promise<VibeTubeRenderResponse> {
     const url = `${this.getBaseUrl()}/vibetube/render`;
     const formData = new FormData();
@@ -525,15 +568,37 @@ class ApiClient {
     if (data.width !== undefined) formData.append('width', String(data.width));
     if (data.height !== undefined) formData.append('height', String(data.height));
     if (data.on_threshold !== undefined) formData.append('on_threshold', String(data.on_threshold));
-    if (data.off_threshold !== undefined) formData.append('off_threshold', String(data.off_threshold));
-    if (data.smoothing_windows !== undefined) formData.append('smoothing_windows', String(data.smoothing_windows));
-    if (data.min_hold_windows !== undefined) formData.append('min_hold_windows', String(data.min_hold_windows));
-    if (data.blink_min_interval_sec !== undefined) formData.append('blink_min_interval_sec', String(data.blink_min_interval_sec));
-    if (data.blink_max_interval_sec !== undefined) formData.append('blink_max_interval_sec', String(data.blink_max_interval_sec));
-    if (data.blink_duration_frames !== undefined) formData.append('blink_duration_frames', String(data.blink_duration_frames));
-    if (data.head_motion_amount_px !== undefined) formData.append('head_motion_amount_px', String(data.head_motion_amount_px));
-    if (data.head_motion_change_sec !== undefined) formData.append('head_motion_change_sec', String(data.head_motion_change_sec));
-    if (data.head_motion_smoothness !== undefined) formData.append('head_motion_smoothness', String(data.head_motion_smoothness));
+    if (data.off_threshold !== undefined)
+      formData.append('off_threshold', String(data.off_threshold));
+    if (data.smoothing_windows !== undefined)
+      formData.append('smoothing_windows', String(data.smoothing_windows));
+    if (data.min_hold_windows !== undefined)
+      formData.append('min_hold_windows', String(data.min_hold_windows));
+    if (data.blink_min_interval_sec !== undefined)
+      formData.append('blink_min_interval_sec', String(data.blink_min_interval_sec));
+    if (data.blink_max_interval_sec !== undefined)
+      formData.append('blink_max_interval_sec', String(data.blink_max_interval_sec));
+    if (data.blink_duration_frames !== undefined)
+      formData.append('blink_duration_frames', String(data.blink_duration_frames));
+    if (data.head_motion_amount_px !== undefined)
+      formData.append('head_motion_amount_px', String(data.head_motion_amount_px));
+    if (data.head_motion_change_sec !== undefined)
+      formData.append('head_motion_change_sec', String(data.head_motion_change_sec));
+    if (data.head_motion_smoothness !== undefined)
+      formData.append('head_motion_smoothness', String(data.head_motion_smoothness));
+    if (data.voice_bounce_amount_px !== undefined)
+      formData.append('voice_bounce_amount_px', String(data.voice_bounce_amount_px));
+    if (data.voice_bounce_sensitivity !== undefined)
+      formData.append('voice_bounce_sensitivity', String(data.voice_bounce_sensitivity));
+    if (data.use_background !== undefined)
+      formData.append('use_background', String(data.use_background));
+    if (data.use_background_color !== undefined)
+      formData.append('use_background_color', String(data.use_background_color));
+    if (data.use_background_image !== undefined)
+      formData.append('use_background_image', String(data.use_background_image));
+    if (data.background_color !== undefined)
+      formData.append('background_color', data.background_color);
+    if (data.background_image) formData.append('background_image', data.background_image);
 
     if (data.idle) formData.append('idle', data.idle);
     if (data.talk) formData.append('talk', data.talk);
@@ -604,7 +669,10 @@ class ApiClient {
     return response.json();
   }
 
-  getVibeTubeAvatarStateUrl(profileId: string, state: 'idle' | 'talk' | 'idle_blink' | 'talk_blink'): string {
+  getVibeTubeAvatarStateUrl(
+    profileId: string,
+    state: 'idle' | 'talk' | 'idle_blink' | 'talk_blink',
+  ): string {
     return `${this.getBaseUrl()}/profiles/${profileId}/vibetube-avatar-pack/${state}`;
   }
 }

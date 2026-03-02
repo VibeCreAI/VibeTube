@@ -3,10 +3,13 @@ import { apiClient } from '@/lib/api/client';
 import type { VoiceProfileCreate } from '@/lib/api/types';
 import { usePlatform } from '@/platform/PlatformContext';
 
-export function useProfiles() {
+export function useProfiles(options?: { excludeStoryOnly?: boolean }) {
   return useQuery({
-    queryKey: ['profiles'],
-    queryFn: () => apiClient.listProfiles(),
+    queryKey: ['profiles', options],
+    queryFn: () =>
+      apiClient.listProfiles({
+        exclude_story_only: options?.excludeStoryOnly,
+      }),
   });
 }
 
@@ -104,6 +107,24 @@ export function useUpdateSample() {
   return useMutation({
     mutationFn: ({ sampleId, referenceText }: { sampleId: string; referenceText: string }) =>
       apiClient.updateProfileSample(sampleId, referenceText),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({
+        queryKey: ['profiles', data.profile_id, 'samples'],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ['profiles', data.profile_id],
+      });
+      queryClient.invalidateQueries({ queryKey: ['profiles'] });
+    },
+  });
+}
+
+export function useUpdateSampleGain() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ sampleId, gainDb }: { sampleId: string; gainDb: number }) =>
+      apiClient.updateProfileSampleGain(sampleId, gainDb),
     onSuccess: (data) => {
       queryClient.invalidateQueries({
         queryKey: ['profiles', data.profile_id, 'samples'],

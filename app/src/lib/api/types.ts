@@ -50,6 +50,7 @@ export interface GenerationResponse {
 export interface HistoryQuery {
   profile_id?: string;
   search?: string;
+  exclude_story_generations?: boolean;
   limit?: number;
   offset?: number;
 }
@@ -96,7 +97,7 @@ export interface ModelStatus {
   model_name: string;
   display_name: string;
   downloaded: boolean;
-  downloading: boolean;  // True if download is in progress
+  downloading: boolean; // True if download is in progress
   size_mb?: number;
   loaded: boolean;
 }
@@ -203,6 +204,29 @@ export interface StoryItemSplit {
   split_time_ms: number;
 }
 
+export interface StoryVibeTubeRenderRequest {
+  fps?: number;
+  width?: number;
+  height?: number;
+  on_threshold?: number;
+  off_threshold?: number;
+  smoothing_windows?: number;
+  min_hold_windows?: number;
+  blink_min_interval_sec?: number;
+  blink_max_interval_sec?: number;
+  blink_duration_frames?: number;
+  head_motion_amount_px?: number;
+  head_motion_change_sec?: number;
+  head_motion_smoothness?: number;
+  voice_bounce_amount_px?: number;
+  voice_bounce_sensitivity?: number;
+  use_background_color?: boolean;
+  use_background_image?: boolean;
+  use_background?: boolean;
+  background_color?: string;
+  background_image_data?: string;
+}
+
 export interface VibeTubeRenderRequest {
   profile_id?: string;
   text?: string;
@@ -221,6 +245,13 @@ export interface VibeTubeRenderRequest {
   head_motion_amount_px?: number;
   head_motion_change_sec?: number;
   head_motion_smoothness?: number;
+  voice_bounce_amount_px?: number;
+  voice_bounce_sensitivity?: number;
+  use_background_color?: boolean;
+  use_background_image?: boolean;
+  use_background?: boolean;
+  background_color?: string;
+  background_image?: File;
   idle?: File;
   talk?: File;
   idle_blink?: File;
@@ -246,6 +277,7 @@ export interface VibeTubeRenderResponse {
   meta_path: string;
   duration: number;
   source_generation_id?: string;
+  source_story_id?: string;
 }
 
 export interface VibeTubeJobResponse {
@@ -254,6 +286,8 @@ export interface VibeTubeJobResponse {
   duration_sec?: number;
   video_path?: string;
   source_generation_id?: string;
+  source_story_id?: string;
+  source_story_name?: string;
   source_profile_name?: string;
   source_text_preview?: string;
 }

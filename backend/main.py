@@ -24,6 +24,8 @@ import signal
 import os
 import shutil
 import json
+import base64
+import re
 from urllib.parse import quote
 from PIL import Image, ExifTags
 
@@ -45,7 +47,13 @@ def _safe_content_disposition(disposition_type: str, filename: str) -> str:
 
 
 from . import database, models, profiles, history, tts, transcribe, config, export_import, channels, stories, vibetube, __version__
-from .database import get_db, Generation as DBGeneration, VoiceProfile as DBVoiceProfile
+from .database import (
+    get_db,
+    Generation as DBGeneration,
+    VoiceProfile as DBVoiceProfile,
+    Story as DBStory,
+    StoryItem as DBStoryItem,
+)
 from .utils.progress import get_progress_manager
 from .utils.tasks import get_task_manager
 from .utils.cache import clear_voice_prompt_cache
@@ -146,6 +154,23 @@ def _extract_caption_preview(captions_path: Path, max_chars: int = 120) -> Optio
     except Exception:
         return None
     return None
+
+
+def _save_data_url_image(data_url: str, target_path: Path) -> None:
+    """Decode a data URL image and save it to disk."""
+    match = re.match(r"^data:(image/[a-zA-Z0-9.+-]+);base64,(.+)$", data_url.strip())
+    if not match:
+        raise ValueError("Invalid background image data URL format.")
+    mime_type = match.group(1).lower()
+    raw_b64 = match.group(2)
+    if mime_type not in {"image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"}:
+        raise ValueError("Unsupported background image type. Use PNG/JPEG/WEBP/GIF.")
+    try:
+        payload = base64.b64decode(raw_b64, validate=True)
+    except Exception as exc:
+        raise ValueError("Invalid background image base64 payload.") from exc
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_bytes(payload)
 
 
 # ============================================
@@ -310,9 +335,12 @@ async def create_profile(
 
 
 @app.get("/profiles", response_model=List[models.VoiceProfileResponse])
-async def list_profiles(db: Session = Depends(get_db)):
+async def list_profiles(
+    exclude_story_only: bool = Query(default=False),
+    db: Session = Depends(get_db),
+):
     """List all voice profiles."""
-    return await profiles.list_profiles(db)
+    return await profiles.list_profiles(db, exclude_story_only=exclude_story_only)
 
 
 @app.post("/profiles/import", response_model=models.VoiceProfileResponse)
@@ -444,6 +472,22 @@ async def update_profile_sample(
 ):
     """Update a profile sample's reference text."""
     sample = await profiles.update_profile_sample(sample_id, data.reference_text, db)
+    if not sample:
+        raise HTTPException(status_code=404, detail="Sample not found")
+    return sample
+
+
+@app.put("/profiles/samples/{sample_id}/gain", response_model=models.ProfileSampleResponse)
+async def update_profile_sample_gain(
+    sample_id: str,
+    data: models.ProfileSampleGainUpdate,
+    db: Session = Depends(get_db),
+):
+    """Apply gain (dB) to a profile sample audio file."""
+    try:
+        sample = await profiles.apply_gain_to_profile_sample(sample_id, data.gain_db, db)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     if not sample:
         raise HTTPException(status_code=404, detail="Sample not found")
     return sample
@@ -929,6 +973,13 @@ async def vibetube_render(
     head_motion_amount_px: float = Form(3.0),
     head_motion_change_sec: float = Form(2.8),
     head_motion_smoothness: float = Form(0.04),
+    voice_bounce_amount_px: float = Form(4.0),
+    voice_bounce_sensitivity: float = Form(1.0),
+    use_background_color: bool = Form(False),
+    use_background_image: bool = Form(False),
+    use_background: bool = Form(False),
+    background_color: str = Form("#101820"),
+    background_image: Optional[UploadFile] = File(None),
     idle: Optional[UploadFile] = File(None),
     talk: Optional[UploadFile] = File(None),
     idle_blink: Optional[UploadFile] = File(None),
@@ -1011,6 +1062,16 @@ async def vibetube_render(
             if (pack_dir / "blink.png").exists():
                 shutil.copy2(pack_dir / "blink.png", avatar_dir / "blink.png")
 
+        background_image_path: Optional[Path] = None
+        if use_background_image and background_image is not None:
+            suffix = Path(background_image.filename or "").suffix.lower()
+            if suffix not in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+                suffix = ".png"
+            background_image_path = base_out / f"background{suffix}"
+            await save_upload(background_image, background_image_path)
+
+        background_enabled = bool(use_background or use_background_color or (use_background_image and background_image_path))
+
         render_result = vibetube.render_overlay(
             audio_path=audio_path,
             avatar_dir=avatar_dir,
@@ -1028,6 +1089,11 @@ async def vibetube_render(
             head_motion_amount_px=head_motion_amount_px,
             head_motion_change_sec=head_motion_change_sec,
             head_motion_smoothness=head_motion_smoothness,
+            voice_bounce_amount_px=voice_bounce_amount_px,
+            voice_bounce_sensitivity=voice_bounce_sensitivity,
+            use_background=background_enabled,
+            background_color=background_color if use_background_color else None,
+            background_image_path=background_image_path,
             text=source_text,
         )
 
@@ -1120,6 +1186,8 @@ async def list_vibetube_jobs(db: Session = Depends(get_db)):
         duration_sec: Optional[float] = None
         video_path: Optional[str] = None
         source_generation_id: Optional[str] = None
+        source_story_id: Optional[str] = None
+        source_story_name: Optional[str] = None
         source_profile_name: Optional[str] = None
         source_text_preview: Optional[str] = None
 
@@ -1128,6 +1196,8 @@ async def list_vibetube_jobs(db: Session = Depends(get_db)):
                 meta = json.loads(meta_path.read_text(encoding="utf-8"))
                 duration_sec = float(meta.get("duration_sec")) if meta.get("duration_sec") is not None else None
                 source_generation_id = meta.get("source_generation_id")
+                source_story_id = meta.get("source_story_id")
+                source_story_name = meta.get("source_story_name")
                 source_profile_name = meta.get("source_profile_name")
                 source_text_preview = meta.get("source_text_preview")
             except Exception:
@@ -1174,6 +1244,8 @@ async def list_vibetube_jobs(db: Session = Depends(get_db)):
                 duration_sec=duration_sec,
                 video_path=video_path,
                 source_generation_id=source_generation_id,
+                source_story_id=source_story_id,
+                source_story_name=source_story_name,
                 source_profile_name=source_profile_name,
                 source_text_preview=source_text_preview,
             )
@@ -1202,6 +1274,7 @@ async def delete_vibetube_job(job_id: str):
 async def list_history(
     profile_id: Optional[str] = None,
     search: Optional[str] = None,
+    exclude_story_generations: bool = Query(default=False),
     limit: int = Query(default=50, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -1210,6 +1283,7 @@ async def list_history(
     query = models.HistoryQuery(
         profile_id=profile_id,
         search=search,
+        exclude_story_generations=exclude_story_generations,
         limit=limit,
         offset=offset,
     )
@@ -1630,6 +1704,164 @@ async def export_story_audio(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/stories/{story_id}/render-vibetube", response_model=models.VibeTubeRenderResponse)
+async def render_story_vibetube(
+    story_id: str,
+    data: models.StoryVibeTubeRenderRequest,
+    db: Session = Depends(get_db),
+):
+    """Render a full story into one multi-avatar VibeTube video."""
+    try:
+        story = db.query(DBStory).filter_by(id=story_id).first()
+        if not story:
+            raise HTTPException(status_code=404, detail="Story not found")
+
+        rows = (
+            db.query(DBStoryItem, DBGeneration)
+            .join(DBGeneration, DBStoryItem.generation_id == DBGeneration.id)
+            .filter(DBStoryItem.story_id == story_id)
+            .order_by(DBStoryItem.start_time_ms)
+            .all()
+        )
+        if not rows:
+            raise HTTPException(status_code=400, detail="Story has no items to render")
+
+        audio_bytes = await stories.export_story_audio(story_id, db)
+        if not audio_bytes:
+            raise HTTPException(status_code=400, detail="Story has no renderable audio items")
+
+        job_id = str(uuid.uuid4())
+        base_out = config.get_data_dir() / "vibetube" / job_id
+        avatar_root = base_out / "avatar"
+        avatar_root.mkdir(parents=True, exist_ok=True)
+
+        mixed_audio_path = base_out / "story.wav"
+        mixed_audio_path.write_bytes(audio_bytes)
+
+        profile_segments: dict[str, list[tuple[float, float]]] = {}
+        story_text_parts: list[str] = []
+
+        for item, generation in rows:
+            trim_start_ms = max(0, int(getattr(item, "trim_start_ms", 0) or 0))
+            trim_end_ms = max(0, int(getattr(item, "trim_end_ms", 0) or 0))
+            original_ms = max(0, int(round(float(generation.duration) * 1000)))
+            effective_ms = max(0, original_ms - trim_start_ms - trim_end_ms)
+            if effective_ms <= 0:
+                continue
+
+            start_sec = max(0.0, float(item.start_time_ms) / 1000.0)
+            end_sec = start_sec + (effective_ms / 1000.0)
+            profile_segments.setdefault(generation.profile_id, []).append((start_sec, end_sec))
+
+            text = (generation.text or "").strip()
+            if text:
+                story_text_parts.append(text)
+
+        if not profile_segments:
+            raise HTTPException(status_code=400, detail="Story has no effective audio after trim settings")
+
+        for profile_id in sorted(profile_segments.keys()):
+            profile = db.query(DBVoiceProfile).filter_by(id=profile_id).first()
+            profile_name = profile.name if profile else profile_id
+            pack_dir = _vibetube_avatar_pack_dir(profile_id)
+            if not (pack_dir / "idle.png").exists() or not (pack_dir / "talk.png").exists():
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f'VibeTube avatar pack missing for profile "{profile_name}". '
+                        "Save idle/talk (and optional blink) images for each voice in this story."
+                    ),
+                )
+
+            out_dir = avatar_root / profile_id
+            out_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(pack_dir / "idle.png", out_dir / "idle.png")
+            shutil.copy2(pack_dir / "talk.png", out_dir / "talk.png")
+            if (pack_dir / "idle_blink.png").exists():
+                shutil.copy2(pack_dir / "idle_blink.png", out_dir / "idle_blink.png")
+            if (pack_dir / "talk_blink.png").exists():
+                shutil.copy2(pack_dir / "talk_blink.png", out_dir / "talk_blink.png")
+            if (pack_dir / "blink.png").exists():
+                shutil.copy2(pack_dir / "blink.png", out_dir / "blink.png")
+
+        avatar_dirs = {profile_id: avatar_root / profile_id for profile_id in profile_segments.keys()}
+        story_text = "\n".join(story_text_parts)
+        story_background_image_path: Optional[Path] = None
+        if data.use_background_image and data.background_image_data:
+            try:
+                story_background_image_path = base_out / "story_background.png"
+                _save_data_url_image(data.background_image_data, story_background_image_path)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+
+        story_background_enabled = bool(
+            data.use_background
+            or data.use_background_color
+            or (data.use_background_image and story_background_image_path is not None)
+        )
+
+        render_result = vibetube.render_story_overlay(
+            audio_path=mixed_audio_path,
+            profile_segments=profile_segments,
+            avatar_dirs=avatar_dirs,
+            output_dir=base_out,
+            fps=data.fps,
+            width=data.width,
+            height=data.height,
+            on_threshold=data.on_threshold,
+            off_threshold=data.off_threshold,
+            smoothing_windows=data.smoothing_windows,
+            min_hold_windows=data.min_hold_windows,
+            blink_min_interval_sec=data.blink_min_interval_sec,
+            blink_max_interval_sec=data.blink_max_interval_sec,
+            blink_duration_frames=data.blink_duration_frames,
+            head_motion_amount_px=data.head_motion_amount_px,
+            head_motion_change_sec=data.head_motion_change_sec,
+            head_motion_smoothness=data.head_motion_smoothness,
+            voice_bounce_amount_px=data.voice_bounce_amount_px,
+            voice_bounce_sensitivity=data.voice_bounce_sensitivity,
+            use_background=story_background_enabled,
+            background_color=data.background_color if data.use_background_color else None,
+            background_image_path=story_background_image_path,
+            text=story_text,
+        )
+
+        source_text_preview = story_text.strip()[:1000] if story_text.strip() else None
+
+        meta_path = Path(render_result["meta_path"])
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            meta = {}
+        meta.update(
+            {
+                "source_story_id": story_id,
+                "source_story_name": story.name,
+                "source_text_preview": source_text_preview,
+            }
+        )
+        meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+        return models.VibeTubeRenderResponse(
+            job_id=job_id,
+            output_dir=str(base_out.resolve()),
+            video_path=str(Path(render_result["video_path"]).resolve()),
+            timeline_path=str(Path(render_result["timeline_path"]).resolve()),
+            captions_path=str(Path(render_result["captions_path"]).resolve())
+            if render_result["captions_path"]
+            else None,
+            meta_path=str(Path(render_result["meta_path"]).resolve()),
+            duration=float(render_result["duration_sec"]),
+            source_story_id=story_id,
+        )
+    except HTTPException:
+        raise
+    except vibetube.VibeTubeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Story VibeTube render failed: {str(e)}")
 
 
 # ============================================
