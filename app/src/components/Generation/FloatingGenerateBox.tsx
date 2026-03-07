@@ -38,6 +38,7 @@ export function FloatingGenerateBox({
   isPlayerOpen = false,
   showVoiceSelector = false,
 }: FloatingGenerateBoxProps) {
+  const autoVideoCheckboxId = 'floating-generate-auto-video';
   const queryClient = useQueryClient();
   const AUTO_VIDEO_STORAGE_KEY = 'vibetube.generate.autoVideo';
   const selectedProfileId = useUIStore((state) => state.selectedProfileId);
@@ -72,13 +73,14 @@ export function FloatingGenerateBox({
     }
   }, [isAutoRenderEnabled]);
 
-  const { form, handleSubmit, isPending } = useGenerationForm({
+  const { form, handleSubmit, isPending, statusMessage } = useGenerationForm({
     autoPlayAudioOnSuccess: !(!isStoriesRoute && isAutoRenderEnabled),
-    onSuccess: async (generationId) => {
+    onSuccess: async (generationId, _generation, helpers) => {
       setIsExpanded(false);
       // If on stories route and a story is selected, add generation to story
       if (isStoriesRoute && selectedStoryId && generationId) {
         try {
+          helpers.setStatusMessage('Adding clip to story...');
           await addStoryItem.mutateAsync({
             storyId: selectedStoryId,
             data: { generation_id: generationId },
@@ -99,11 +101,13 @@ export function FloatingGenerateBox({
 
       if (!isStoriesRoute && isAutoRenderEnabled && selectedProfileId && generationId) {
         setIsAutoRenderingVideo(true);
+        helpers.setStatusMessage('Preparing video render...');
         toast({
           title: 'Auto video rendering...',
           description: 'Voice generated. Rendering linked video in background.',
         });
         try {
+          helpers.setStatusMessage('Checking avatar pack...');
           const pack = await apiClient.getVibeTubeAvatarPack(selectedProfileId);
           if (!pack.complete) {
             toast({
@@ -119,6 +123,7 @@ export function FloatingGenerateBox({
           const backgroundImage = settings.use_background_image
             ? await getPersistedVibeTubeBackgroundImageFileAsync()
             : undefined;
+          helpers.setStatusMessage('Rendering video...');
           const renderResult = await apiClient.renderVibeTube({
             profile_id: selectedProfileId,
             generation_id: generationId,
@@ -379,7 +384,8 @@ export function FloatingGenerateBox({
                   </Button>
                   <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 whitespace-nowrap rounded-md bg-popover px-3 py-1.5 text-xs text-popover-foreground border border-border opacity-0 transition-opacity group-hover:opacity-100 z-[9999]">
                     {isPending || isAutoRenderingVideo
-                      ? 'Generating...'
+                      ? statusMessage ||
+                        (isAutoRenderingVideo ? 'Rendering video...' : 'Generating...')
                       : !selectedProfileId
                         ? 'Select a voice profile first'
                         : 'Generate speech'}
@@ -429,8 +435,12 @@ export function FloatingGenerateBox({
               >
                 <div className="flex items-center gap-2">
                   {!isStoriesRoute && (
-                    <label className="flex items-center gap-2 px-2 py-1 rounded-full border border-border bg-card/70 text-xs whitespace-nowrap">
+                    <label
+                      htmlFor={autoVideoCheckboxId}
+                      className="flex items-center gap-2 px-2 py-1 rounded-full border border-border bg-card/70 text-xs whitespace-nowrap"
+                    >
                       <Checkbox
+                        id={autoVideoCheckboxId}
                         checked={isAutoRenderEnabled}
                         onCheckedChange={setIsAutoRenderEnabled}
                         disabled={isPending || isAutoRenderingVideo}
@@ -508,6 +518,9 @@ export function FloatingGenerateBox({
                     )}
                   />
                 </div>
+                {(isPending || isAutoRenderingVideo) && statusMessage && (
+                  <div className="text-xs text-muted-foreground px-2">{statusMessage}</div>
+                )}
               </motion.div>
             </AnimatePresence>
           </form>
@@ -524,7 +537,9 @@ export function FloatingGenerateBox({
               controls
               autoPlay
               src={apiClient.getVibeTubePreviewUrl(autoVideoJobId)}
-            />
+            >
+              <track kind="captions" />
+            </video>
           ) : (
             <div className="text-sm text-muted-foreground">No video available.</div>
           )}

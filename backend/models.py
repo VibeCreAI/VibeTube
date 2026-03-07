@@ -168,6 +168,15 @@ class StoryVibeTubeRenderRequest(BaseModel):
     use_background: bool = False
     background_color: Optional[str] = Field(default="#101820")
     background_image_data: Optional[str] = None
+    subtitle_enabled: bool = False
+    subtitle_style: str = Field(default="minimal", pattern="^(minimal|cinema|glass)$")
+    subtitle_text_color: str = Field(default="#FFFFFF", pattern="^#[0-9A-Fa-f]{6}$")
+    subtitle_outline_color: str = Field(default="#000000", pattern="^#[0-9A-Fa-f]{6}$")
+    subtitle_outline_width: int = Field(default=2, ge=0, le=12)
+    subtitle_font_family: str = Field(default="sans", pattern="^(sans|serif|mono)$")
+    subtitle_bold: bool = True
+    subtitle_italic: bool = False
+    story_layout_style: str = Field(default="balanced", pattern="^(balanced|stage|compact)$")
 
 
 class HistoryQuery(BaseModel):

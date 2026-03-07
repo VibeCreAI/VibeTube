@@ -28,7 +28,7 @@ export function GenerationForm() {
   const selectedProfileId = useUIStore((state) => state.selectedProfileId);
   const { data: selectedProfile } = useProfile(selectedProfileId || '');
 
-  const { form, handleSubmit, isPending } = useGenerationForm();
+  const { form, handleSubmit, isPending, statusMessage } = useGenerationForm();
 
   async function onSubmit(data: Parameters<typeof handleSubmit>[0]) {
     await handleSubmit(data, selectedProfileId);
@@ -170,20 +170,19 @@ export function GenerationForm() {
               />
             </div>
 
-            <Button
-              type="submit"
-              className="w-full"
-              disabled={isPending || !selectedProfileId}
-            >
+            <Button type="submit" className="w-full" disabled={isPending || !selectedProfileId}>
               {isPending ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Generating...
+                  {statusMessage || 'Generating...'}
                 </>
               ) : (
                 'Generate Speech'
               )}
             </Button>
+            {isPending && statusMessage && (
+              <div className="text-sm text-muted-foreground">{statusMessage}</div>
+            )}
           </form>
         </Form>
       </CardContent>

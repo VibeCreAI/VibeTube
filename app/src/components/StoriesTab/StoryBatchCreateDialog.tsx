@@ -1,3 +1,4 @@
+import { useQueryClient } from '@tanstack/react-query';
 import { ChevronDown, ChevronUp, Copy, FileJson, Loader2, Plus, Trash2 } from 'lucide-react';
 import { type ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
@@ -20,10 +21,10 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
+import { apiClient } from '@/lib/api/client';
 import type { StoryBatchCreateRequest, StoryVibeTubeRenderRequest } from '@/lib/api/types';
 import { LANGUAGE_OPTIONS } from '@/lib/constants/languages';
 import { useProfiles } from '@/lib/hooks/useProfiles';
-import { useCreateStoryBatch } from '@/lib/hooks/useStories';
 import { getPersistedVibeTubeRenderSettings } from '@/lib/utils/vibetubeSettings';
 import { useStoryStore } from '@/stores/storyStore';
 
@@ -111,8 +112,8 @@ Example:
 }`;
 
 export function StoryBatchCreateDialog({ open, onOpenChange }: StoryBatchCreateDialogProps) {
+  const queryClient = useQueryClient();
   const { data: profiles } = useProfiles();
-  const createStoryBatch = useCreateStoryBatch();
   const setSelectedStoryId = useStoryStore((state) => state.setSelectedStoryId);
   const { toast } = useToast();
   const importInputRef = useRef<HTMLInputElement | null>(null);
@@ -125,6 +126,8 @@ export function StoryBatchCreateDialog({ open, onOpenChange }: StoryBatchCreateD
   const [rows, setRows] = useState<BatchRow[]>([]);
   const [guideOpen, setGuideOpen] = useState(false);
   const [importWarnings, setImportWarnings] = useState<string[]>([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [progressMessage, setProgressMessage] = useState('');
 
   const defaultProfileName = useMemo(
     () => (profiles?.length === 1 ? profiles[0].name : ''),
@@ -173,6 +176,7 @@ export function StoryBatchCreateDialog({ open, onOpenChange }: StoryBatchCreateD
     setAutoRender(false);
     setRenderSettingsOverride(undefined);
     setImportWarnings([]);
+    setProgressMessage('');
     setRows([createRow(defaultProfileName), createRow(defaultProfileName)]);
   };
 
@@ -308,52 +312,130 @@ export function StoryBatchCreateDialog({ open, onOpenChange }: StoryBatchCreateD
       }
     }
 
-    createStoryBatch.mutate(
-      {
-        story_name: trimmedStoryName,
-        description: description.trim() || undefined,
-        auto_render: autoRender,
-        render_settings: autoRender
-          ? renderSettingsOverride || getPersistedVibeTubeRenderSettings()
-          : undefined,
-        entries: rows.map((row) => ({
-          profile_name: row.profile_name.trim(),
-          text: row.text.trim(),
-          language: row.language as (typeof LANGUAGE_OPTIONS)[number]['value'],
-          model_size: row.model_size,
-          seed: row.seed.trim() ? Number(row.seed) : undefined,
-          instruct: row.instruct.trim() || undefined,
-        })),
-      },
-      {
-        onSuccess: (result) => {
-          setSelectedStoryId(result.story.id);
-          onOpenChange(false);
-          resetState();
-          toast({
-            title: 'Story created',
-            description:
-              autoRender && !result.render_job
-                ? `"${result.story.name}" was created, but auto-render could not start.`
-                : `"${result.story.name}" was created with ${result.results.length} clips.`,
+    const run = async () => {
+      setIsSubmitting(true);
+      setProgressMessage('Preparing bulk generation...');
+
+      const profileIdByName = new Map(
+        (profiles ?? []).map((profile) => [profile.name.trim(), profile.id]),
+      );
+      const createdGenerationIds: string[] = [];
+      let createdStoryId: string | null = null;
+      let renderJob: Awaited<ReturnType<typeof apiClient.renderStoryVibeTube>> | null = null;
+
+      try {
+        const entries = rows.map((row) => {
+          const profileName = row.profile_name.trim();
+          const profileId = profileIdByName.get(profileName);
+          if (!profileId) {
+            throw new Error(`Unknown voice profile "${profileName}"`);
+          }
+
+          return {
+            profileId,
+            profileName,
+            text: row.text.trim(),
+            language: row.language as (typeof LANGUAGE_OPTIONS)[number]['value'],
+            modelSize: row.model_size,
+            seed: row.seed.trim() ? Number(row.seed) : undefined,
+            instruct: row.instruct.trim() || undefined,
+          };
+        });
+
+        const generatedResults = [];
+        for (let index = 0; index < entries.length; index += 1) {
+          const entry = entries[index];
+          setProgressMessage(`Generating clip ${index + 1} of ${entries.length}...`);
+          const generation = await apiClient.generateSpeech({
+            profile_id: entry.profileId,
+            text: entry.text,
+            language: entry.language,
+            model_size: entry.modelSize,
+            seed: entry.seed,
+            instruct: entry.instruct,
           });
-        },
-        onError: (error) => {
-          toast({
-            title: 'Bulk generation failed',
-            description: error.message,
-            variant: 'destructive',
+          createdGenerationIds.push(generation.id);
+          generatedResults.push(generation);
+        }
+
+        setProgressMessage('Creating story...');
+        const createdStory = await apiClient.createStory({
+          name: trimmedStoryName,
+          description: description.trim() || undefined,
+        });
+        createdStoryId = createdStory.id;
+
+        for (let index = 0; index < generatedResults.length; index += 1) {
+          setProgressMessage(`Adding clip ${index + 1} of ${generatedResults.length} to story...`);
+          await apiClient.addStoryItem(createdStory.id, {
+            generation_id: generatedResults[index].id,
           });
-        },
-      },
-    );
+        }
+
+        if (autoRender) {
+          setProgressMessage('Rendering video...');
+          renderJob = await apiClient.renderStoryVibeTube(
+            createdStory.id,
+            renderSettingsOverride || getPersistedVibeTubeRenderSettings(),
+          );
+        }
+
+        setProgressMessage('Refreshing story data...');
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['stories'] }),
+          queryClient.invalidateQueries({ queryKey: ['history'] }),
+          queryClient.invalidateQueries({ queryKey: ['stories', createdStory.id] }),
+          queryClient.invalidateQueries({ queryKey: ['vibetube-jobs'] }),
+        ]);
+
+        setSelectedStoryId(createdStory.id);
+        onOpenChange(false);
+        resetState();
+        toast({
+          title: 'Story created',
+          description:
+            autoRender && !renderJob
+              ? `"${createdStory.name}" was created, but auto-render could not start.`
+              : `"${createdStory.name}" was created with ${generatedResults.length} clips.`,
+        });
+      } catch (error) {
+        if (createdStoryId) {
+          try {
+            await apiClient.deleteStory(createdStoryId);
+          } catch {
+            // Best-effort rollback.
+          }
+        }
+
+        await Promise.all(
+          createdGenerationIds.map(async (generationId) => {
+            try {
+              await apiClient.deleteGeneration(generationId);
+            } catch {
+              // Best-effort rollback.
+            }
+          }),
+        );
+
+        toast({
+          title: 'Bulk generation failed',
+          description: error instanceof Error ? error.message : 'Unknown error',
+          variant: 'destructive',
+        });
+      } finally {
+        setIsSubmitting(false);
+        setProgressMessage('');
+      }
+    };
+
+    void run();
   };
 
   return (
     <Dialog
       open={open}
       onOpenChange={(nextOpen) => {
-        if (!createStoryBatch.isPending) {
+        if (!isSubmitting) {
           if (!nextOpen) {
             resetState();
           }
@@ -382,7 +464,7 @@ export function StoryBatchCreateDialog({ open, onOpenChange }: StoryBatchCreateD
             type="button"
             variant="outline"
             onClick={() => importInputRef.current?.click()}
-            disabled={createStoryBatch.isPending}
+            disabled={isSubmitting}
           >
             <FileJson className="mr-2 h-4 w-4" />
             Import JSON
@@ -391,7 +473,7 @@ export function StoryBatchCreateDialog({ open, onOpenChange }: StoryBatchCreateD
             type="button"
             variant="outline"
             onClick={() => setGuideOpen(true)}
-            disabled={createStoryBatch.isPending}
+            disabled={isSubmitting}
           >
             <Copy className="mr-2 h-4 w-4" />
             JSON Guide
@@ -408,7 +490,7 @@ export function StoryBatchCreateDialog({ open, onOpenChange }: StoryBatchCreateD
               id="bulk-story-name"
               value={storyName}
               onChange={(e) => setStoryName(e.target.value)}
-              disabled={createStoryBatch.isPending}
+              disabled={isSubmitting}
             />
           </div>
           <div className="space-y-2">
@@ -418,7 +500,7 @@ export function StoryBatchCreateDialog({ open, onOpenChange }: StoryBatchCreateD
                 className="h-4 w-4"
                 checked={autoRender}
                 onChange={(e) => setAutoRender(e.target.checked)}
-                disabled={createStoryBatch.isPending}
+                disabled={isSubmitting}
               />
               Auto Render Video
             </Label>
@@ -431,7 +513,7 @@ export function StoryBatchCreateDialog({ open, onOpenChange }: StoryBatchCreateD
             id="bulk-story-description"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            disabled={createStoryBatch.isPending}
+            disabled={isSubmitting}
             className="min-h-20"
           />
         </div>
@@ -447,7 +529,7 @@ export function StoryBatchCreateDialog({ open, onOpenChange }: StoryBatchCreateD
                     variant="ghost"
                     size="icon"
                     onClick={() => moveRow(index, -1)}
-                    disabled={createStoryBatch.isPending || index === 0}
+                    disabled={isSubmitting || index === 0}
                   >
                     <ChevronUp className="h-4 w-4" />
                   </Button>
@@ -456,7 +538,7 @@ export function StoryBatchCreateDialog({ open, onOpenChange }: StoryBatchCreateD
                     variant="ghost"
                     size="icon"
                     onClick={() => moveRow(index, 1)}
-                    disabled={createStoryBatch.isPending || index === rows.length - 1}
+                    disabled={isSubmitting || index === rows.length - 1}
                   >
                     <ChevronDown className="h-4 w-4" />
                   </Button>
@@ -465,7 +547,7 @@ export function StoryBatchCreateDialog({ open, onOpenChange }: StoryBatchCreateD
                     variant="ghost"
                     size="sm"
                     onClick={() => updateRow(row.id, { showAdvanced: !row.showAdvanced })}
-                    disabled={createStoryBatch.isPending}
+                    disabled={isSubmitting}
                   >
                     {row.showAdvanced ? 'Hide' : 'More'}
                   </Button>
@@ -474,7 +556,7 @@ export function StoryBatchCreateDialog({ open, onOpenChange }: StoryBatchCreateD
                     variant="ghost"
                     size="icon"
                     onClick={() => removeRow(row.id)}
-                    disabled={createStoryBatch.isPending || rows.length <= 1}
+                    disabled={isSubmitting || rows.length <= 1}
                   >
                     <Trash2 className="h-4 w-4" />
                   </Button>
@@ -487,7 +569,7 @@ export function StoryBatchCreateDialog({ open, onOpenChange }: StoryBatchCreateD
                   <Select
                     value={row.profile_name}
                     onValueChange={(value) => updateRow(row.id, { profile_name: value })}
-                    disabled={createStoryBatch.isPending}
+                    disabled={isSubmitting}
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="Select a voice" />
@@ -507,7 +589,7 @@ export function StoryBatchCreateDialog({ open, onOpenChange }: StoryBatchCreateD
                   <Textarea
                     value={row.text}
                     onChange={(e) => updateRow(row.id, { text: e.target.value })}
-                    disabled={createStoryBatch.isPending}
+                    disabled={isSubmitting}
                     className="min-h-24"
                   />
                 </div>
@@ -520,7 +602,7 @@ export function StoryBatchCreateDialog({ open, onOpenChange }: StoryBatchCreateD
                     <Select
                       value={row.language}
                       onValueChange={(value) => updateRow(row.id, { language: value })}
-                      disabled={createStoryBatch.isPending}
+                      disabled={isSubmitting}
                     >
                       <SelectTrigger>
                         <SelectValue />
@@ -542,7 +624,7 @@ export function StoryBatchCreateDialog({ open, onOpenChange }: StoryBatchCreateD
                       onValueChange={(value: '1.7B' | '0.6B') =>
                         updateRow(row.id, { model_size: value })
                       }
-                      disabled={createStoryBatch.isPending}
+                      disabled={isSubmitting}
                     >
                       <SelectTrigger>
                         <SelectValue />
@@ -561,7 +643,7 @@ export function StoryBatchCreateDialog({ open, onOpenChange }: StoryBatchCreateD
                       onChange={(e) =>
                         updateRow(row.id, { seed: e.target.value.replace(/[^0-9]/g, '') })
                       }
-                      disabled={createStoryBatch.isPending}
+                      disabled={isSubmitting}
                       placeholder="Optional"
                     />
                   </div>
@@ -571,7 +653,7 @@ export function StoryBatchCreateDialog({ open, onOpenChange }: StoryBatchCreateD
                     <Textarea
                       value={row.instruct}
                       onChange={(e) => updateRow(row.id, { instruct: e.target.value })}
-                      disabled={createStoryBatch.isPending}
+                      disabled={isSubmitting}
                       className="min-h-20"
                       placeholder="Optional delivery instructions"
                     />
@@ -583,31 +665,26 @@ export function StoryBatchCreateDialog({ open, onOpenChange }: StoryBatchCreateD
         </div>
 
         <DialogFooter className="items-center justify-between sm:justify-between">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={addRow}
-            disabled={createStoryBatch.isPending}
-          >
+          <Button type="button" variant="outline" onClick={addRow} disabled={isSubmitting}>
             <Plus className="mr-2 h-4 w-4" />
             Add Row
           </Button>
           <div className="flex items-center gap-2">
-            {createStoryBatch.isPending && (
+            {isSubmitting && (
               <div className="text-sm text-muted-foreground flex items-center gap-2">
                 <Loader2 className="h-4 w-4 animate-spin" />
-                Generating {rows.length} clips...
+                {progressMessage || `Generating ${rows.length} clips...`}
               </div>
             )}
             <Button
               type="button"
               variant="outline"
               onClick={() => onOpenChange(false)}
-              disabled={createStoryBatch.isPending}
+              disabled={isSubmitting}
             >
               Cancel
             </Button>
-            <Button type="button" onClick={handleSubmit} disabled={createStoryBatch.isPending}>
+            <Button type="button" onClick={handleSubmit} disabled={isSubmitting}>
               Create Story
             </Button>
           </div>

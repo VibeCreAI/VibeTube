@@ -605,6 +605,8 @@ class ApiClient {
     if (data.language) formData.append('language', data.language);
     if (data.generation_id) formData.append('generation_id', data.generation_id);
     if (data.fps !== undefined) formData.append('fps', String(data.fps));
+    if (data.resolution_preset !== undefined)
+      formData.append('resolution_preset', data.resolution_preset);
     if (data.width !== undefined) formData.append('width', String(data.width));
     if (data.height !== undefined) formData.append('height', String(data.height));
     if (data.on_threshold !== undefined) formData.append('on_threshold', String(data.on_threshold));
@@ -638,6 +640,21 @@ class ApiClient {
       formData.append('use_background_image', String(data.use_background_image));
     if (data.background_color !== undefined)
       formData.append('background_color', data.background_color);
+    if (data.subtitle_enabled !== undefined)
+      formData.append('subtitle_enabled', String(data.subtitle_enabled));
+    if (data.subtitle_style !== undefined) formData.append('subtitle_style', data.subtitle_style);
+    if (data.subtitle_text_color !== undefined)
+      formData.append('subtitle_text_color', data.subtitle_text_color);
+    if (data.subtitle_outline_color !== undefined)
+      formData.append('subtitle_outline_color', data.subtitle_outline_color);
+    if (data.subtitle_outline_width !== undefined)
+      formData.append('subtitle_outline_width', String(data.subtitle_outline_width));
+    if (data.subtitle_font_family !== undefined)
+      formData.append('subtitle_font_family', data.subtitle_font_family);
+    if (data.subtitle_bold !== undefined)
+      formData.append('subtitle_bold', String(data.subtitle_bold));
+    if (data.subtitle_italic !== undefined)
+      formData.append('subtitle_italic', String(data.subtitle_italic));
     if (data.background_image) formData.append('background_image', data.background_image);
 
     if (data.idle) formData.append('idle', data.idle);

@@ -22,7 +22,13 @@ const generationSchema = z.object({
 export type GenerationFormValues = z.infer<typeof generationSchema>;
 
 interface UseGenerationFormOptions {
-  onSuccess?: (generationId: string, generation: GenerationResponse) => void | Promise<void>;
+  onSuccess?: (
+    generationId: string,
+    generation: GenerationResponse,
+    helpers: {
+      setStatusMessage: (message: string) => void;
+    },
+  ) => void | Promise<void>;
   defaultValues?: Partial<GenerationFormValues>;
   autoPlayAudioOnSuccess?: boolean;
 }
@@ -34,6 +40,7 @@ export function useGenerationForm(options: UseGenerationFormOptions = {}) {
   const setIsGenerating = useGenerationStore((state) => state.setIsGenerating);
   const [downloadingModelName, setDownloadingModelName] = useState<string | null>(null);
   const [downloadingDisplayName, setDownloadingDisplayName] = useState<string | null>(null);
+  const [statusMessage, setStatusMessage] = useState('');
 
   useModelDownloadToast({
     modelName: downloadingModelName || '',
@@ -69,6 +76,7 @@ export function useGenerationForm(options: UseGenerationFormOptions = {}) {
 
     try {
       setIsGenerating(true);
+      setStatusMessage('Checking model...');
 
       const modelName = `qwen-tts-${data.modelSize}`;
       const displayName = data.modelSize === '1.7B' ? 'Qwen TTS 1.7B' : 'Qwen TTS 0.6B';
@@ -85,6 +93,7 @@ export function useGenerationForm(options: UseGenerationFormOptions = {}) {
         console.error('Failed to check model status:', error);
       }
 
+      setStatusMessage('Generating audio...');
       const result = await generation.mutateAsync({
         profile_id: selectedProfileId,
         text: data.text,
@@ -100,6 +109,7 @@ export function useGenerationForm(options: UseGenerationFormOptions = {}) {
       });
 
       if (autoPlayAudioOnSuccess) {
+        setStatusMessage('Preparing playback...');
         const audioUrl = apiClient.getAudioUrl(result.id);
         setAudioWithAutoPlay(audioUrl, result.id, selectedProfileId, data.text.substring(0, 50));
       }
@@ -107,7 +117,9 @@ export function useGenerationForm(options: UseGenerationFormOptions = {}) {
       form.reset();
       if (options.onSuccess) {
         try {
-          await options.onSuccess(result.id, result);
+          await options.onSuccess(result.id, result, {
+            setStatusMessage,
+          });
         } catch (error) {
           console.error('onSuccess callback failed:', error);
         }
@@ -122,6 +134,7 @@ export function useGenerationForm(options: UseGenerationFormOptions = {}) {
       setIsGenerating(false);
       setDownloadingModelName(null);
       setDownloadingDisplayName(null);
+      setStatusMessage('');
     }
   }
 
@@ -129,5 +142,6 @@ export function useGenerationForm(options: UseGenerationFormOptions = {}) {
     form,
     handleSubmit,
     isPending: generation.isPending,
+    statusMessage,
   };
 }

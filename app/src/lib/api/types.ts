@@ -217,6 +217,7 @@ export interface StoryItemSplit {
 
 export interface StoryVibeTubeRenderRequest {
   fps?: number;
+  resolution_preset?: string;
   width?: number;
   height?: number;
   on_threshold?: number;
@@ -236,6 +237,15 @@ export interface StoryVibeTubeRenderRequest {
   use_background?: boolean;
   background_color?: string;
   background_image_data?: string;
+  subtitle_enabled?: boolean;
+  subtitle_style?: 'minimal' | 'cinema' | 'glass';
+  subtitle_text_color?: string;
+  subtitle_outline_color?: string;
+  subtitle_outline_width?: number;
+  subtitle_font_family?: 'sans' | 'serif' | 'mono';
+  subtitle_bold?: boolean;
+  subtitle_italic?: boolean;
+  story_layout_style?: 'balanced' | 'stage' | 'compact';
 }
 
 export interface StoryBatchEntry {
@@ -274,6 +284,7 @@ export interface VibeTubeRenderRequest {
   language?: LanguageCode;
   generation_id?: string;
   fps?: number;
+  resolution_preset?: string;
   width?: number;
   height?: number;
   on_threshold?: number;
@@ -292,6 +303,15 @@ export interface VibeTubeRenderRequest {
   use_background_image?: boolean;
   use_background?: boolean;
   background_color?: string;
+  subtitle_enabled?: boolean;
+  subtitle_style?: 'minimal' | 'cinema' | 'glass';
+  subtitle_text_color?: string;
+  subtitle_outline_color?: string;
+  subtitle_outline_width?: number;
+  subtitle_font_family?: 'sans' | 'serif' | 'mono';
+  subtitle_bold?: boolean;
+  subtitle_italic?: boolean;
+  story_layout_style?: 'balanced' | 'stage' | 'compact';
   background_image?: File;
   idle?: File;
   talk?: File;

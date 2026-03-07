@@ -8,6 +8,7 @@ import contextlib
 import json
 import math
 import random
+import re
 import shutil
 import subprocess
 import wave
@@ -15,11 +16,14 @@ from bisect import bisect_right
 from pathlib import Path
 from typing import Optional
 
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
 
 class VibeTubeError(RuntimeError):
     """Raised when VibeTube rendering fails."""
+
+
+SUBTITLE_STYLE_VALUES = {"minimal", "cinema", "glass"}
 
 
 def _parse_background_rgba(use_background: bool, background_color: Optional[str]) -> Optional[tuple[int, int, int, int]]:
@@ -162,6 +166,16 @@ def render_story_overlay(
     background_color: Optional[str] = None,
     background_image_path: Optional[Path] = None,
     text: Optional[str] = None,
+    subtitle_enabled: bool = False,
+    subtitle_style: str = "minimal",
+    subtitle_text_color: str = "#FFFFFF",
+    subtitle_outline_color: str = "#000000",
+    subtitle_outline_width: int = 2,
+    subtitle_font_family: str = "sans",
+    subtitle_bold: bool = True,
+    subtitle_italic: bool = False,
+    story_layout_style: str = "balanced",
+    subtitle_cues: Optional[list[dict[str, int | str]]] = None,
 ) -> dict:
     """Render a multi-profile VibeTube overlay from explicit speaking segments."""
     if not profile_segments:
@@ -170,9 +184,18 @@ def render_story_overlay(
     output_dir.mkdir(parents=True, exist_ok=True)
     duration_sec = _wav_duration_seconds(audio_path)
     total_frames = max(1, int(math.ceil(duration_sec * fps)))
+    subtitle_style = _normalize_subtitle_style(subtitle_style)
+    generated_subtitle_cues = subtitle_cues if subtitle_cues is not None else _build_subtitle_cues(text=text, duration_sec=duration_sec)
+    render_subtitle_cues = generated_subtitle_cues if subtitle_enabled else []
 
     profile_ids = sorted(profile_segments.keys())
-    slots = _layout_slots(len(profile_ids), width, height)
+    slots = _layout_slots(
+        len(profile_ids),
+        width,
+        height,
+        reserve_bottom_ratio=0.14,
+        story_layout_style=story_layout_style,
+    )
     rms_talk_frames = _rms_talk_frames(
         wav_path=audio_path,
         duration_sec=duration_sec,
@@ -250,10 +273,21 @@ def render_story_overlay(
         background_frames=background_frames,
         background_durations_ms=background_durations_ms,
         background_total_ms=background_total_ms,
+        subtitle_cues=render_subtitle_cues,
+        subtitle_style=subtitle_style,
+        subtitle_text_color=subtitle_text_color,
+        subtitle_outline_color=subtitle_outline_color,
+        subtitle_outline_width=subtitle_outline_width,
+        subtitle_font_family=subtitle_font_family,
+        subtitle_bold=subtitle_bold,
+        subtitle_italic=subtitle_italic,
     )
 
     captions_path = None
-    if text and text.strip():
+    if generated_subtitle_cues:
+        captions_path = output_dir / "captions.srt"
+        _write_srt_from_cues(generated_subtitle_cues, captions_path)
+    elif text and text.strip():
         captions_path = output_dir / "captions.srt"
         _write_srt(text=text.strip(), duration_sec=duration_sec, out_path=captions_path)
 
@@ -292,6 +326,19 @@ def render_story_overlay(
             "color": background_color if use_background else None,
             "image": str(background_image_path) if (use_background and background_image_path) else None,
         },
+        "subtitles": {
+            "enabled": subtitle_enabled,
+            "style": subtitle_style if subtitle_enabled else None,
+            "text_color": subtitle_text_color if subtitle_enabled else None,
+            "outline_color": subtitle_outline_color if subtitle_enabled else None,
+            "outline_width": subtitle_outline_width if subtitle_enabled else None,
+            "font_family": subtitle_font_family if subtitle_enabled else None,
+            "bold": subtitle_bold if subtitle_enabled else None,
+            "italic": subtitle_italic if subtitle_enabled else None,
+        },
+        "story_layout": {
+            "style": story_layout_style,
+        },
     }
     meta_path = output_dir / "meta.json"
     meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
@@ -329,11 +376,23 @@ def render_overlay(
     background_color: Optional[str] = None,
     background_image_path: Optional[Path] = None,
     text: Optional[str] = None,
+    subtitle_enabled: bool = False,
+    subtitle_style: str = "minimal",
+    subtitle_text_color: str = "#FFFFFF",
+    subtitle_outline_color: str = "#000000",
+    subtitle_outline_width: int = 2,
+    subtitle_font_family: str = "sans",
+    subtitle_bold: bool = True,
+    subtitle_italic: bool = False,
+    subtitle_cues: Optional[list[dict[str, int | str]]] = None,
 ) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     duration_sec = _wav_duration_seconds(audio_path)
     total_frames = max(1, int(math.ceil(duration_sec * fps)))
+    subtitle_style = _normalize_subtitle_style(subtitle_style)
+    generated_subtitle_cues = subtitle_cues if subtitle_cues is not None else _build_subtitle_cues(text=text, duration_sec=duration_sec)
+    render_subtitle_cues = generated_subtitle_cues if subtitle_enabled else []
 
     timeline = _rms_timeline(
         wav_path=audio_path,
@@ -384,10 +443,21 @@ def render_overlay(
         background_frames=background_frames,
         background_durations_ms=background_durations_ms,
         background_total_ms=background_total_ms,
+        subtitle_cues=render_subtitle_cues,
+        subtitle_style=subtitle_style,
+        subtitle_text_color=subtitle_text_color,
+        subtitle_outline_color=subtitle_outline_color,
+        subtitle_outline_width=subtitle_outline_width,
+        subtitle_font_family=subtitle_font_family,
+        subtitle_bold=subtitle_bold,
+        subtitle_italic=subtitle_italic,
     )
 
     captions_path = None
-    if text and text.strip():
+    if generated_subtitle_cues:
+        captions_path = output_dir / "captions.srt"
+        _write_srt_from_cues(generated_subtitle_cues, captions_path)
+    elif text and text.strip():
         captions_path = output_dir / "captions.srt"
         _write_srt(text=text.strip(), duration_sec=duration_sec, out_path=captions_path)
 
@@ -418,6 +488,16 @@ def render_overlay(
             "enabled": use_background,
             "color": background_color if use_background else None,
             "image": str(background_image_path) if (use_background and background_image_path) else None,
+        },
+        "subtitles": {
+            "enabled": subtitle_enabled,
+            "style": subtitle_style if subtitle_enabled else None,
+            "text_color": subtitle_text_color if subtitle_enabled else None,
+            "outline_color": subtitle_outline_color if subtitle_enabled else None,
+            "outline_width": subtitle_outline_width if subtitle_enabled else None,
+            "font_family": subtitle_font_family if subtitle_enabled else None,
+            "bold": subtitle_bold if subtitle_enabled else None,
+            "italic": subtitle_italic if subtitle_enabled else None,
         },
     }
     meta_path = output_dir / "meta.json"
@@ -697,6 +777,14 @@ def _export_webm(
     background_frames: Optional[list[Image.Image]],
     background_durations_ms: Optional[list[int]],
     background_total_ms: int,
+    subtitle_cues: list[dict[str, int | str]],
+    subtitle_style: str,
+    subtitle_text_color: str,
+    subtitle_outline_color: str,
+    subtitle_outline_width: int,
+    subtitle_font_family: str,
+    subtitle_bold: bool,
+    subtitle_italic: bool,
 ) -> None:
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
@@ -759,6 +847,14 @@ def _export_webm(
 
     bounce_amount = max(0.0, float(voice_bounce_amount_px))
     bounce_hz = 4.0
+    subtitle_palette = _resolve_subtitle_palette(
+        subtitle_style=subtitle_style,
+        subtitle_text_color=subtitle_text_color,
+        subtitle_outline_color=subtitle_outline_color,
+        subtitle_outline_width=subtitle_outline_width,
+    )
+    subtitle_font_size = _subtitle_base_font_size(height)
+    subtitle_cursor = 0
     background_cumulative_ms: Optional[list[int]] = None
     if background_durations_ms:
         background_cumulative_ms = []
@@ -835,7 +931,23 @@ def _export_webm(
             )
             if frame_bytes is None:
                 raise VibeTubeError("Avatar assets were not loaded correctly.")
-            proc.stdin.write(frame_bytes)
+            if subtitle_cues:
+                frame_image = Image.frombytes("RGBA", (width, height), frame_bytes)
+                subtitle_cursor = _draw_subtitle_for_time(
+                    image=frame_image,
+                    subtitle_cues=subtitle_cues,
+                    time_ms=int(round((frame / float(fps)) * 1000.0)),
+                    initial_font_size=subtitle_font_size,
+                    subtitle_style=subtitle_style,
+                    subtitle_palette=subtitle_palette,
+                    subtitle_font_family=subtitle_font_family,
+                    subtitle_bold=subtitle_bold,
+                    subtitle_italic=subtitle_italic,
+                    cue_cursor=subtitle_cursor,
+                )
+                proc.stdin.write(frame_image.tobytes())
+            else:
+                proc.stdin.write(frame_bytes)
     finally:
         proc.stdin.close()
 
@@ -884,22 +996,161 @@ def _frame_bytes_for_asset(
     return out
 
 
-def _layout_slots(count: int, width: int, height: int) -> list[dict[str, int]]:
-    """Build a simple grid layout for N avatars."""
+def _layout_slots(
+    count: int,
+    width: int,
+    height: int,
+    reserve_bottom_ratio: float = 0.0,
+    story_layout_style: str = "balanced",
+) -> list[dict[str, int]]:
+    """Build story avatar layouts with hand-tuned templates for common counts."""
     if count <= 0:
         return []
+
+    aspect = width / float(max(1, height))
+    safe_top = max(18, int(round(height * 0.05)))
+    safe_bottom = max(18, int(round(height * max(0.06, reserve_bottom_ratio))))
+    usable_height = max(1, height - safe_top - safe_bottom)
+
+    template_slots = _layout_slots_from_template(
+        count=count,
+        width=width,
+        safe_top=safe_top,
+        usable_height=usable_height,
+        aspect=aspect,
+        story_layout_style=story_layout_style,
+    )
+    if template_slots is not None:
+        return template_slots
+
+    return _layout_slots_grid_fallback(
+        count=count,
+        width=width,
+        safe_top=safe_top,
+        safe_bottom=safe_bottom,
+        height=height,
+    )
+
+
+def _layout_slots_from_template(
+    count: int,
+    width: int,
+    safe_top: int,
+    usable_height: int,
+    aspect: float,
+    story_layout_style: str,
+) -> Optional[list[dict[str, int]]]:
+    orientation = "portrait" if aspect < 0.82 else "landscape" if aspect > 1.18 else "square"
+
+    templates: dict[str, dict[str, dict[int, list[tuple[float, float, float, float]]]]] = {
+        "balanced": {
+            "portrait": {
+                1: [(0.5, 0.34, 0.60, 0.52)],
+                2: [(0.30, 0.32, 0.46, 0.42), (0.70, 0.32, 0.46, 0.42)],
+                3: [(0.26, 0.24, 0.42, 0.38), (0.74, 0.24, 0.42, 0.38), (0.5, 0.58, 0.46, 0.42)],
+                4: [(0.28, 0.22, 0.36, 0.34), (0.72, 0.22, 0.36, 0.34), (0.28, 0.56, 0.36, 0.34), (0.72, 0.56, 0.36, 0.34)],
+            },
+            "square": {
+                1: [(0.5, 0.40, 0.64, 0.58)],
+                2: [(0.30, 0.42, 0.46, 0.46), (0.70, 0.42, 0.46, 0.46)],
+                3: [(0.27, 0.25, 0.42, 0.40), (0.73, 0.25, 0.42, 0.40), (0.5, 0.66, 0.46, 0.42)],
+                4: [(0.28, 0.26, 0.38, 0.36), (0.72, 0.26, 0.38, 0.36), (0.28, 0.66, 0.38, 0.36), (0.72, 0.66, 0.38, 0.36)],
+            },
+            "landscape": {
+                1: [(0.5, 0.46, 0.46, 0.72)],
+                2: [(0.30, 0.46, 0.34, 0.62), (0.70, 0.46, 0.34, 0.62)],
+                3: [(0.20, 0.46, 0.28, 0.56), (0.50, 0.46, 0.28, 0.56), (0.80, 0.46, 0.28, 0.56)],
+                4: [(0.16, 0.28, 0.25, 0.44), (0.50, 0.28, 0.25, 0.44), (0.84, 0.28, 0.25, 0.44), (0.50, 0.72, 0.28, 0.48)],
+            },
+        },
+        "stage": {
+            "portrait": {
+                1: [(0.5, 0.36, 0.58, 0.50)],
+                2: [(0.32, 0.36, 0.42, 0.40), (0.68, 0.36, 0.42, 0.40)],
+                3: [(0.22, 0.32, 0.36, 0.34), (0.50, 0.35, 0.42, 0.40), (0.78, 0.32, 0.36, 0.34)],
+                4: [(0.18, 0.30, 0.30, 0.28), (0.41, 0.35, 0.34, 0.34), (0.64, 0.35, 0.34, 0.34), (0.86, 0.30, 0.30, 0.28)],
+            },
+            "square": {
+                1: [(0.5, 0.42, 0.62, 0.58)],
+                2: [(0.32, 0.44, 0.40, 0.44), (0.68, 0.44, 0.40, 0.44)],
+                3: [(0.20, 0.44, 0.30, 0.38), (0.50, 0.44, 0.36, 0.44), (0.80, 0.44, 0.30, 0.38)],
+                4: [(0.18, 0.40, 0.26, 0.34), (0.40, 0.50, 0.28, 0.38), (0.60, 0.50, 0.28, 0.38), (0.82, 0.40, 0.26, 0.34)],
+            },
+            "landscape": {
+                1: [(0.5, 0.48, 0.48, 0.74)],
+                2: [(0.34, 0.50, 0.32, 0.62), (0.66, 0.50, 0.32, 0.62)],
+                3: [(0.22, 0.52, 0.26, 0.54), (0.50, 0.50, 0.30, 0.64), (0.78, 0.52, 0.26, 0.54)],
+                4: [(0.14, 0.52, 0.22, 0.46), (0.38, 0.50, 0.24, 0.56), (0.62, 0.50, 0.24, 0.56), (0.86, 0.52, 0.22, 0.46)],
+            },
+        },
+        "compact": {
+            "portrait": {
+                1: [(0.5, 0.38, 0.50, 0.42)],
+                2: [(0.32, 0.36, 0.38, 0.34), (0.68, 0.36, 0.38, 0.34)],
+                3: [(0.28, 0.28, 0.34, 0.30), (0.72, 0.28, 0.34, 0.30), (0.5, 0.56, 0.38, 0.34)],
+                4: [(0.30, 0.28, 0.30, 0.28), (0.70, 0.28, 0.30, 0.28), (0.30, 0.56, 0.30, 0.28), (0.70, 0.56, 0.30, 0.28)],
+            },
+            "square": {
+                1: [(0.5, 0.42, 0.56, 0.50)],
+                2: [(0.30, 0.42, 0.38, 0.38), (0.70, 0.42, 0.38, 0.38)],
+                3: [(0.28, 0.28, 0.34, 0.32), (0.72, 0.28, 0.34, 0.32), (0.5, 0.62, 0.38, 0.36)],
+                4: [(0.30, 0.30, 0.30, 0.30), (0.70, 0.30, 0.30, 0.30), (0.30, 0.64, 0.30, 0.30), (0.70, 0.64, 0.30, 0.30)],
+            },
+            "landscape": {
+                1: [(0.5, 0.48, 0.40, 0.64)],
+                2: [(0.30, 0.48, 0.30, 0.54), (0.70, 0.48, 0.30, 0.54)],
+                3: [(0.22, 0.46, 0.24, 0.48), (0.50, 0.46, 0.26, 0.50), (0.78, 0.46, 0.24, 0.48)],
+                4: [(0.18, 0.34, 0.22, 0.40), (0.42, 0.34, 0.22, 0.40), (0.58, 0.34, 0.22, 0.40), (0.82, 0.34, 0.22, 0.40)],
+            },
+        },
+    }
+
+    style_key = story_layout_style if story_layout_style in templates else "balanced"
+    template = templates.get(style_key, {}).get(orientation, {}).get(count)
+    if template is None:
+        return None
+
+    slots: list[dict[str, int]] = []
+    for cx, cy, w_frac, h_frac in template:
+        slot_w = max(1, int(round(width * w_frac)))
+        slot_h = max(1, int(round(usable_height * h_frac)))
+        x = int(round(cx * width - slot_w / 2.0))
+        y = safe_top + int(round(cy * usable_height - slot_h / 2.0))
+        x = max(0, min(width - slot_w, x))
+        y = max(safe_top, y)
+        slots.append({"x": x, "y": y, "width": slot_w, "height": slot_h})
+    return slots
+
+
+def _layout_slots_grid_fallback(
+    count: int,
+    width: int,
+    safe_top: int,
+    safe_bottom: int,
+    height: int,
+) -> list[dict[str, int]]:
+    outer_pad_x = max(18, int(round(width * 0.05)))
+    usable_width = max(1, width - (outer_pad_x * 2))
+    usable_height = max(1, height - safe_top - safe_bottom)
     cols = max(1, int(math.ceil(math.sqrt(count))))
     rows = max(1, int(math.ceil(count / cols)))
-    slot_w = max(1, width // cols)
-    slot_h = max(1, height // rows)
+    gap_x = max(10, int(round(min(width, height) * 0.03)))
+    gap_y = max(12, int(round(min(width, height) * 0.03)))
+    slot_w = max(1, int((usable_width - gap_x * (cols - 1)) // cols))
+    slot_h = max(1, int((usable_height - gap_y * (rows - 1)) // rows))
+    total_grid_w = cols * slot_w + max(0, cols - 1) * gap_x
+    total_grid_h = rows * slot_h + max(0, rows - 1) * gap_y
+    grid_x = outer_pad_x + max(0, (usable_width - total_grid_w) // 2)
+    grid_y = safe_top + max(0, (usable_height - total_grid_h) // 2)
+
     slots: list[dict[str, int]] = []
     for idx in range(count):
         col = idx % cols
         row = idx // cols
         slots.append(
             {
-                "x": col * slot_w,
-                "y": row * slot_h,
+                "x": grid_x + col * (slot_w + gap_x),
+                "y": grid_y + row * (slot_h + gap_y),
                 "width": slot_w,
                 "height": slot_h,
             }
@@ -971,6 +1222,14 @@ def _export_story_webm(
     background_frames: Optional[list[Image.Image]],
     background_durations_ms: Optional[list[int]],
     background_total_ms: int,
+    subtitle_cues: list[dict[str, int | str]],
+    subtitle_style: str,
+    subtitle_text_color: str,
+    subtitle_outline_color: str,
+    subtitle_outline_width: int,
+    subtitle_font_family: str,
+    subtitle_bold: bool,
+    subtitle_italic: bool,
 ) -> None:
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
@@ -1039,6 +1298,14 @@ def _export_story_webm(
     bounce_amount = max(0.0, float(voice_bounce_amount_px))
     bounce_hz = {pid: rngs[pid].uniform(3.2, 4.8) for pid in profile_ids}
     bounce_phase = {pid: rngs[pid].uniform(0.0, 2.0 * math.pi) for pid in profile_ids}
+    subtitle_palette = _resolve_subtitle_palette(
+        subtitle_style=subtitle_style,
+        subtitle_text_color=subtitle_text_color,
+        subtitle_outline_color=subtitle_outline_color,
+        subtitle_outline_width=subtitle_outline_width,
+    )
+    subtitle_font_size = _subtitle_base_font_size(height)
+    subtitle_cursor = 0
     background_cumulative_ms: Optional[list[int]] = None
     if background_durations_ms:
         background_cumulative_ms = []
@@ -1124,6 +1391,19 @@ def _export_story_webm(
                     (slot["x"] + offset_x, slot["y"] + offset_y + bounce_offset_y),
                 )
 
+            if subtitle_cues:
+                subtitle_cursor = _draw_subtitle_for_time(
+                    image=canvas,
+                    subtitle_cues=subtitle_cues,
+                    time_ms=int(round((frame / float(fps)) * 1000.0)),
+                    initial_font_size=subtitle_font_size,
+                    subtitle_style=subtitle_style,
+                    subtitle_palette=subtitle_palette,
+                    subtitle_font_family=subtitle_font_family,
+                    subtitle_bold=subtitle_bold,
+                    subtitle_italic=subtitle_italic,
+                    cue_cursor=subtitle_cursor,
+                )
             proc.stdin.write(canvas.tobytes())
     finally:
         proc.stdin.close()
@@ -1134,36 +1414,379 @@ def _export_story_webm(
 
 
 def _write_srt(text: str, duration_sec: float, out_path: Path) -> None:
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    if not lines:
-        lines = ["..."]
+    cues = _build_subtitle_cues(text=text, duration_sec=duration_sec)
+    _write_srt_from_cues(cues, out_path)
+
+
+def _write_srt_from_cues(cues: list[dict[str, int | str]], out_path: Path) -> None:
+    blocks: list[str] = []
+    for idx, cue in enumerate(cues, start=1):
+        blocks.append(str(idx))
+        blocks.append(f"{_srt_time_from_ms(int(cue['start_ms']))} --> {_srt_time_from_ms(int(cue['end_ms']))}")
+        blocks.append(str(cue["text"]))
+        blocks.append("")
+    out_path.write_text("\n".join(blocks), encoding="utf-8")
+
+
+def _normalize_subtitle_style(subtitle_style: str) -> str:
+    style = (subtitle_style or "minimal").strip().lower()
+    if style not in SUBTITLE_STYLE_VALUES:
+        raise VibeTubeError(f"Unsupported subtitle style: {subtitle_style}")
+    return style
+
+
+def _build_subtitle_cues(text: Optional[str], duration_sec: float) -> list[dict[str, int | str]]:
+    segments = _subtitle_text_segments(text)
+    if not segments:
+        segments = ["..."]
 
     total_ms = max(1, int(round(max(0.0, float(duration_sec)) * 1000.0)))
-    total_weight = sum(max(1, len(line)) for line in lines)
+    total_weight = sum(max(1, len(segment)) for segment in segments)
     cursor_ms = 0
     cumulative_weight = 0
-    blocks: list[str] = []
-    line_count = len(lines)
-    for idx, line in enumerate(lines, start=1):
-        weight = max(1, len(line))
+    cues: list[dict[str, int | str]] = []
+    segment_count = len(segments)
+    for idx, segment in enumerate(segments, start=1):
+        weight = max(1, len(segment))
         start_ms = cursor_ms
-        if idx == line_count:
+        if idx == segment_count:
             end_ms = total_ms
         else:
             cumulative_weight += weight
             proportional_end = int(round(total_ms * (cumulative_weight / float(total_weight))))
-
-            remaining_lines = line_count - idx
+            remaining_segments = segment_count - idx
             min_end = start_ms + 1
-            max_end = max(min_end, total_ms - remaining_lines)
+            max_end = max(min_end, total_ms - remaining_segments)
             end_ms = max(min_end, min(max_end, proportional_end))
-
-        blocks.append(str(idx))
-        blocks.append(f"{_srt_time_from_ms(start_ms)} --> {_srt_time_from_ms(end_ms)}")
-        blocks.append(line)
-        blocks.append("")
+        cues.append({"start_ms": start_ms, "end_ms": end_ms, "text": segment})
         cursor_ms = end_ms
-    out_path.write_text("\n".join(blocks), encoding="utf-8")
+    return cues
+
+
+def _subtitle_text_segments(text: Optional[str]) -> list[str]:
+    raw_lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    if not raw_lines:
+        return []
+
+    parts: list[str] = []
+    for raw_line in raw_lines:
+        split_parts = re.split(r"(?<=[.!?])\s+|(?<=,)\s+", raw_line)
+        for part in split_parts:
+            normalized = re.sub(r"\s+", " ", part).strip()
+            if not normalized:
+                continue
+            words = normalized.split(" ")
+            current: list[str] = []
+            for word in words:
+                candidate = " ".join(current + [word]).strip()
+                if current and len(candidate) > 52:
+                    parts.append(" ".join(current))
+                    current = [word]
+                else:
+                    current.append(word)
+            if current:
+                parts.append(" ".join(current))
+    return parts
+
+
+def _subtitle_base_font_size(height: int) -> int:
+    return max(18, int(round(height * 0.055)))
+
+
+def _load_subtitle_font(
+    font_size: int,
+    subtitle_font_family: str,
+    subtitle_bold: bool,
+    subtitle_italic: bool,
+) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    for font_name in _subtitle_font_candidates(subtitle_font_family, subtitle_bold, subtitle_italic):
+        with contextlib.suppress(OSError):
+            return ImageFont.truetype(font_name, font_size)
+    return ImageFont.load_default()
+
+
+def _subtitle_font_candidates(
+    subtitle_font_family: str,
+    subtitle_bold: bool,
+    subtitle_italic: bool,
+) -> list[str]:
+    family = (subtitle_font_family or "sans").strip().lower()
+    style_key = (
+        "bold-italic"
+        if subtitle_bold and subtitle_italic
+        else "bold"
+        if subtitle_bold
+        else "italic"
+        if subtitle_italic
+        else "regular"
+    )
+    family_map = {
+        "sans": {
+            "regular": ["DejaVuSans.ttf", "arial.ttf"],
+            "bold": ["DejaVuSans-Bold.ttf", "arialbd.ttf", "arial.ttf"],
+            "italic": ["DejaVuSans-Oblique.ttf", "ariali.ttf", "DejaVuSans.ttf"],
+            "bold-italic": ["DejaVuSans-BoldOblique.ttf", "arialbi.ttf", "DejaVuSans-Bold.ttf"],
+        },
+        "serif": {
+            "regular": ["DejaVuSerif.ttf", "times.ttf", "Georgia.ttf"],
+            "bold": ["DejaVuSerif-Bold.ttf", "timesbd.ttf", "Georgia Bold.ttf", "DejaVuSerif.ttf"],
+            "italic": ["DejaVuSerif-Italic.ttf", "timesi.ttf", "Georgia Italic.ttf", "DejaVuSerif.ttf"],
+            "bold-italic": ["DejaVuSerif-BoldItalic.ttf", "timesbi.ttf", "DejaVuSerif-Bold.ttf"],
+        },
+        "mono": {
+            "regular": ["DejaVuSansMono.ttf", "consola.ttf", "cour.ttf"],
+            "bold": ["DejaVuSansMono-Bold.ttf", "consolab.ttf", "courbd.ttf", "DejaVuSansMono.ttf"],
+            "italic": ["DejaVuSansMono-Oblique.ttf", "consolai.ttf", "DejaVuSansMono.ttf"],
+            "bold-italic": ["DejaVuSansMono-BoldOblique.ttf", "consolaz.ttf", "DejaVuSansMono-Bold.ttf"],
+        },
+    }
+    return family_map.get(family, family_map["sans"])[style_key]
+
+
+def _draw_subtitle_for_time(
+    image: Image.Image,
+    subtitle_cues: list[dict[str, int | str]],
+    time_ms: int,
+    initial_font_size: int,
+    subtitle_style: str,
+    subtitle_palette: dict[str, tuple[int, int, int, int] | int],
+    subtitle_font_family: str,
+    subtitle_bold: bool,
+    subtitle_italic: bool,
+    cue_cursor: int,
+) -> int:
+    cue_count = len(subtitle_cues)
+    while cue_cursor < cue_count and int(subtitle_cues[cue_cursor]["end_ms"]) <= time_ms:
+        cue_cursor += 1
+    if cue_cursor >= cue_count:
+        return cue_cursor
+
+    cue = subtitle_cues[cue_cursor]
+    if int(cue["start_ms"]) > time_ms or int(cue["end_ms"]) <= time_ms:
+        return cue_cursor
+
+    text = str(cue["text"]).strip()
+    if not text:
+        return cue_cursor
+
+    draw = ImageDraw.Draw(image, "RGBA")
+    width, height = image.size
+    max_lines = 3 if height >= width else 2
+    text_block = _fit_subtitle_text_block(
+        draw=draw,
+        text=text,
+        width=width,
+        height=height,
+        initial_font_size=initial_font_size,
+        stroke_width=int(subtitle_palette["stroke_width"]),
+        max_lines=max_lines,
+        subtitle_font_family=subtitle_font_family,
+        subtitle_bold=subtitle_bold,
+        subtitle_italic=subtitle_italic,
+    )
+    if text_block is None:
+        return cue_cursor
+
+    font = text_block["font"]
+    lines = text_block["lines"]
+    if not lines:
+        return cue_cursor
+
+    line_gap = max(6, int(round(height * 0.01)))
+    stroke_width = int(subtitle_palette["stroke_width"])
+    metrics = [draw.textbbox((0, 0), line, font=font, stroke_width=stroke_width) for line in lines]
+    line_heights = [max(1, bbox[3] - bbox[1]) for bbox in metrics]
+    total_height = sum(line_heights) + (line_gap * (len(lines) - 1))
+    bottom_margin = max(18, int(round(height * 0.055)))
+    left_padding = max(10, int(round(width * 0.06)))
+    right_padding = left_padding
+    text_width = max(max(1, bbox[2] - bbox[0]) for bbox in metrics)
+    left = max(8, int(round((width - text_width) / 2.0)))
+    right = min(width - 8, left + text_width)
+    top = max(8, height - bottom_margin - total_height)
+    _draw_subtitle_style_background(
+        draw,
+        subtitle_style,
+        max(8, left - left_padding),
+        top,
+        min(width - 8, right + right_padding),
+        top + total_height,
+        width,
+        height,
+        subtitle_palette,
+    )
+
+    y = top
+    for line, bbox, line_height in zip(lines, metrics, line_heights):
+        line_width = max(1, bbox[2] - bbox[0])
+        x = int(round((width - line_width) / 2.0))
+        _draw_subtitle_line(draw, subtitle_style, x, y, line, font, subtitle_palette)
+        y += line_height + line_gap
+    return cue_cursor
+
+
+def _fit_subtitle_text_block(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    width: int,
+    height: int,
+    initial_font_size: int,
+    stroke_width: int,
+    max_lines: int,
+    subtitle_font_family: str,
+    subtitle_bold: bool,
+    subtitle_italic: bool,
+) -> Optional[dict[str, object]]:
+    max_width = max(100, int(width * 0.84))
+    max_text_height = max(40, int(height * 0.22))
+    for font_size in range(initial_font_size, 13, -2):
+        font = _load_subtitle_font(font_size, subtitle_font_family, subtitle_bold, subtitle_italic)
+        lines = _wrap_subtitle_text(draw, text, font, max_width=max_width, stroke_width=stroke_width)
+        if not lines or len(lines) > max_lines:
+            continue
+        line_gap = max(4, int(round(height * 0.01)))
+        metrics = [draw.textbbox((0, 0), line, font=font, stroke_width=stroke_width) for line in lines]
+        total_height = sum(max(1, bbox[3] - bbox[1]) for bbox in metrics) + (line_gap * (len(lines) - 1))
+        widest = max(max(1, bbox[2] - bbox[0]) for bbox in metrics)
+        if widest <= max_width and total_height <= max_text_height:
+            return {"font": font, "lines": lines}
+
+    font = _load_subtitle_font(14, subtitle_font_family, subtitle_bold, subtitle_italic)
+    lines = _wrap_subtitle_text(draw, text, font, max_width=max_width, stroke_width=stroke_width)
+    if not lines:
+        return None
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        last = lines[-1]
+        while last and draw.textbbox((0, 0), f"{last}...", font=font, stroke_width=stroke_width)[2] > max_width:
+            last = last[:-1].rstrip()
+        lines[-1] = f"{last}..." if last else "..."
+    return {"font": font, "lines": lines}
+
+
+def _wrap_subtitle_text(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    max_width: int,
+    stroke_width: int,
+) -> list[str]:
+    words = text.split()
+    if not words:
+        return []
+
+    lines: list[str] = []
+    current = words[0]
+    for word in words[1:]:
+        candidate = f"{current} {word}"
+        bbox = draw.textbbox((0, 0), candidate, font=font, stroke_width=stroke_width)
+        if (bbox[2] - bbox[0]) <= max_width:
+            current = candidate
+            continue
+        lines.append(current)
+        current = word
+    lines.append(current)
+    return lines
+
+
+def _draw_subtitle_style_background(
+    draw: ImageDraw.ImageDraw,
+    subtitle_style: str,
+    left: int,
+    top: int,
+    right: int,
+    bottom: int,
+    width: int,
+    height: int,
+    subtitle_palette: dict[str, tuple[int, int, int, int] | int],
+) -> None:
+    pad_x = max(12, int(round(width * 0.02)))
+    pad_y = max(8, int(round(height * 0.012)))
+    box = (left - pad_x, top - pad_y, right + pad_x, bottom + pad_y)
+    if subtitle_style == "minimal":
+        return
+    if subtitle_style == "cinema":
+        draw.rounded_rectangle(
+            box,
+            radius=max(10, int(round(height * 0.015))),
+            fill=subtitle_palette["background_fill"],
+        )
+        return
+    if subtitle_style == "glass":
+        draw.rounded_rectangle(
+            box,
+            radius=max(14, int(round(height * 0.02))),
+            fill=subtitle_palette["background_fill"],
+        )
+        draw.rounded_rectangle(
+            box,
+            radius=max(14, int(round(height * 0.02))),
+            outline=subtitle_palette["panel_outline"],
+            width=2,
+        )
+
+
+def _draw_subtitle_line(
+    draw: ImageDraw.ImageDraw,
+    subtitle_style: str,
+    x: int,
+    y: int,
+    text: str,
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    subtitle_palette: dict[str, tuple[int, int, int, int] | int],
+) -> None:
+    draw.text(
+        (x, y),
+        text,
+        font=font,
+        fill=subtitle_palette["fill"],
+        stroke_width=int(subtitle_palette["stroke_width"]),
+        stroke_fill=subtitle_palette["stroke_fill"],
+    )
+
+
+def _resolve_subtitle_palette(
+    subtitle_style: str,
+    subtitle_text_color: str,
+    subtitle_outline_color: str,
+    subtitle_outline_width: int,
+) -> dict[str, tuple[int, int, int, int] | int]:
+    fill = _parse_hex_color(subtitle_text_color, 255)
+    stroke_fill = _parse_hex_color(subtitle_outline_color, 255)
+    if subtitle_style == "glass":
+        background_fill = (15, 23, 42, 150)
+        panel_outline = (255, 255, 255, 120)
+    elif subtitle_style == "cinema":
+        background_fill = (0, 0, 0, 170)
+        panel_outline = (0, 0, 0, 0)
+    else:
+        background_fill = (0, 0, 0, 0)
+        panel_outline = (0, 0, 0, 0)
+    return {
+        "fill": fill,
+        "stroke_fill": stroke_fill,
+        "stroke_width": max(0, int(subtitle_outline_width)),
+        "background_fill": background_fill,
+        "panel_outline": panel_outline,
+    }
+
+
+def _parse_hex_color(raw: str, alpha: int) -> tuple[int, int, int, int]:
+    value = (raw or "").strip()
+    if value.startswith("#"):
+        value = value[1:]
+    if len(value) != 6:
+        raise VibeTubeError("Invalid subtitle color. Use #RRGGBB.")
+    try:
+        int_value = int(value, 16)
+    except ValueError as exc:
+        raise VibeTubeError("Invalid subtitle color. Use hexadecimal format.") from exc
+    return (
+        (int_value >> 16) & 0xFF,
+        (int_value >> 8) & 0xFF,
+        int_value & 0xFF,
+        alpha,
+    )
 
 
 def _srt_time(seconds: float) -> str:

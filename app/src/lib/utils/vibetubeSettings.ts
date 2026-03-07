@@ -2,6 +2,7 @@ import { useUIStore } from '@/stores/uiStore';
 
 export interface VibeTubeRenderSettings {
   fps: number;
+  resolution_preset: string;
   width: number;
   height: number;
   on_threshold: number;
@@ -21,10 +22,20 @@ export interface VibeTubeRenderSettings {
   use_background: boolean;
   background_color: string;
   background_image_data: string;
+  subtitle_enabled: boolean;
+  subtitle_style: 'minimal' | 'cinema' | 'glass';
+  subtitle_text_color: string;
+  subtitle_outline_color: string;
+  subtitle_outline_width: number;
+  subtitle_font_family: 'sans' | 'serif' | 'mono';
+  subtitle_bold: boolean;
+  subtitle_italic: boolean;
+  story_layout_style: 'balanced' | 'stage' | 'compact';
 }
 
 export const VIBETUBE_SETTING_KEYS = {
   fps: 'vibetube.settings.fps',
+  resolutionPreset: 'vibetube.settings.resolutionPreset',
   width: 'vibetube.settings.width',
   height: 'vibetube.settings.height',
   onThreshold: 'vibetube.settings.onThreshold',
@@ -44,6 +55,15 @@ export const VIBETUBE_SETTING_KEYS = {
   useBackground: 'vibetube.settings.useBackground',
   backgroundColor: 'vibetube.settings.backgroundColor',
   backgroundImageData: 'vibetube.settings.backgroundImageData',
+  subtitleEnabled: 'vibetube.settings.subtitleEnabled',
+  subtitleStyle: 'vibetube.settings.subtitleStyle',
+  subtitleTextColor: 'vibetube.settings.subtitleTextColor',
+  subtitleOutlineColor: 'vibetube.settings.subtitleOutlineColor',
+  subtitleOutlineWidth: 'vibetube.settings.subtitleOutlineWidth',
+  subtitleFontFamily: 'vibetube.settings.subtitleFontFamily',
+  subtitleBold: 'vibetube.settings.subtitleBold',
+  subtitleItalic: 'vibetube.settings.subtitleItalic',
+  storyLayoutStyle: 'vibetube.settings.storyLayoutStyle',
 } as const;
 
 const BG_IMAGE_DB_NAME = 'vibetube-bg-db';
@@ -52,6 +72,7 @@ const BG_IMAGE_KEY = 'backgroundImageData';
 
 export const DEFAULT_VIBETUBE_RENDER_SETTINGS: VibeTubeRenderSettings = {
   fps: 30,
+  resolution_preset: 'square-512',
   width: 512,
   height: 512,
   on_threshold: 0.024,
@@ -71,6 +92,15 @@ export const DEFAULT_VIBETUBE_RENDER_SETTINGS: VibeTubeRenderSettings = {
   use_background: false,
   background_color: '#101820',
   background_image_data: '',
+  subtitle_enabled: false,
+  subtitle_style: 'minimal',
+  subtitle_text_color: '#FFFFFF',
+  subtitle_outline_color: '#000000',
+  subtitle_outline_width: 2,
+  subtitle_font_family: 'sans',
+  subtitle_bold: true,
+  subtitle_italic: false,
+  story_layout_style: 'balanced',
 };
 
 function readNumber(storageKey: string, fallback: number): number {
@@ -132,7 +162,8 @@ async function idbSetBackgroundImageData(value: string): Promise<void> {
       const store = tx.objectStore(BG_IMAGE_STORE);
       store.put(value, BG_IMAGE_KEY);
       tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error ?? new Error('Failed to write background image to IndexedDB'));
+      tx.onerror = () =>
+        reject(tx.error ?? new Error('Failed to write background image to IndexedDB'));
     });
     db.close();
   } catch {
@@ -148,7 +179,8 @@ async function idbGetBackgroundImageData(): Promise<string> {
       const store = tx.objectStore(BG_IMAGE_STORE);
       const req = store.get(BG_IMAGE_KEY);
       req.onsuccess = () => resolve((req.result as string) ?? '');
-      req.onerror = () => reject(req.error ?? new Error('Failed to read background image from IndexedDB'));
+      req.onerror = () =>
+        reject(req.error ?? new Error('Failed to read background image from IndexedDB'));
     });
     db.close();
     return result;
@@ -169,6 +201,10 @@ export function getPersistedVibeTubeRenderSettings(): VibeTubeRenderSettings {
 
   return {
     fps: readNumber(VIBETUBE_SETTING_KEYS.fps, DEFAULT_VIBETUBE_RENDER_SETTINGS.fps),
+    resolution_preset: readString(
+      VIBETUBE_SETTING_KEYS.resolutionPreset,
+      DEFAULT_VIBETUBE_RENDER_SETTINGS.resolution_preset,
+    ),
     width: readNumber(VIBETUBE_SETTING_KEYS.width, DEFAULT_VIBETUBE_RENDER_SETTINGS.width),
     height: readNumber(VIBETUBE_SETTING_KEYS.height, DEFAULT_VIBETUBE_RENDER_SETTINGS.height),
     on_threshold: readNumber(
@@ -227,6 +263,42 @@ export function getPersistedVibeTubeRenderSettings(): VibeTubeRenderSettings {
       DEFAULT_VIBETUBE_RENDER_SETTINGS.background_color,
     ),
     background_image_data: getPersistedVibeTubeBackgroundImageData(),
+    subtitle_enabled: readBoolean(
+      VIBETUBE_SETTING_KEYS.subtitleEnabled,
+      DEFAULT_VIBETUBE_RENDER_SETTINGS.subtitle_enabled,
+    ),
+    subtitle_style: readString(
+      VIBETUBE_SETTING_KEYS.subtitleStyle,
+      DEFAULT_VIBETUBE_RENDER_SETTINGS.subtitle_style,
+    ) as VibeTubeRenderSettings['subtitle_style'],
+    subtitle_text_color: readString(
+      VIBETUBE_SETTING_KEYS.subtitleTextColor,
+      DEFAULT_VIBETUBE_RENDER_SETTINGS.subtitle_text_color,
+    ),
+    subtitle_outline_color: readString(
+      VIBETUBE_SETTING_KEYS.subtitleOutlineColor,
+      DEFAULT_VIBETUBE_RENDER_SETTINGS.subtitle_outline_color,
+    ),
+    subtitle_outline_width: readNumber(
+      VIBETUBE_SETTING_KEYS.subtitleOutlineWidth,
+      DEFAULT_VIBETUBE_RENDER_SETTINGS.subtitle_outline_width,
+    ),
+    subtitle_font_family: readString(
+      VIBETUBE_SETTING_KEYS.subtitleFontFamily,
+      DEFAULT_VIBETUBE_RENDER_SETTINGS.subtitle_font_family,
+    ) as VibeTubeRenderSettings['subtitle_font_family'],
+    subtitle_bold: readBoolean(
+      VIBETUBE_SETTING_KEYS.subtitleBold,
+      DEFAULT_VIBETUBE_RENDER_SETTINGS.subtitle_bold,
+    ),
+    subtitle_italic: readBoolean(
+      VIBETUBE_SETTING_KEYS.subtitleItalic,
+      DEFAULT_VIBETUBE_RENDER_SETTINGS.subtitle_italic,
+    ),
+    story_layout_style: readString(
+      VIBETUBE_SETTING_KEYS.storyLayoutStyle,
+      DEFAULT_VIBETUBE_RENDER_SETTINGS.story_layout_style,
+    ) as VibeTubeRenderSettings['story_layout_style'],
   };
 }
 

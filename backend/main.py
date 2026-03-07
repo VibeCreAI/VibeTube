@@ -1336,6 +1336,14 @@ async def vibetube_render(
     use_background_image: bool = Form(False),
     use_background: bool = Form(False),
     background_color: str = Form("#101820"),
+    subtitle_enabled: bool = Form(False),
+    subtitle_style: str = Form("minimal", pattern="^(minimal|cinema|glass)$"),
+    subtitle_text_color: str = Form("#FFFFFF", pattern="^#[0-9A-Fa-f]{6}$"),
+    subtitle_outline_color: str = Form("#000000", pattern="^#[0-9A-Fa-f]{6}$"),
+    subtitle_outline_width: int = Form(2, ge=0, le=12),
+    subtitle_font_family: str = Form("sans", pattern="^(sans|serif|mono)$"),
+    subtitle_bold: bool = Form(True),
+    subtitle_italic: bool = Form(False),
     background_image: Optional[UploadFile] = File(None),
     idle: Optional[UploadFile] = File(None),
     talk: Optional[UploadFile] = File(None),
@@ -1452,6 +1460,14 @@ async def vibetube_render(
             background_color=background_color if use_background_color else None,
             background_image_path=background_image_path,
             text=source_text,
+            subtitle_enabled=subtitle_enabled,
+            subtitle_style=subtitle_style,
+            subtitle_text_color=subtitle_text_color,
+            subtitle_outline_color=subtitle_outline_color,
+            subtitle_outline_width=subtitle_outline_width,
+            subtitle_font_family=subtitle_font_family,
+            subtitle_bold=subtitle_bold,
+            subtitle_italic=subtitle_italic,
         )
 
         source_profile_name: Optional[str] = None
@@ -1937,6 +1953,7 @@ async def _render_story_vibetube_internal(
 
     profile_segments: dict[str, list[tuple[float, float]]] = {}
     story_text_parts: list[str] = []
+    story_subtitle_cues: list[dict[str, int | str]] = []
 
     for item, generation in rows:
         trim_start_ms = max(0, int(getattr(item, "trim_start_ms", 0) or 0))
@@ -1953,6 +1970,15 @@ async def _render_story_vibetube_internal(
         text = (generation.text or "").strip()
         if text:
             story_text_parts.append(text)
+            relative_cues = vibetube._build_subtitle_cues(text=text, duration_sec=effective_ms / 1000.0)
+            for cue in relative_cues:
+                story_subtitle_cues.append(
+                    {
+                        "start_ms": int(item.start_time_ms) + int(cue["start_ms"]),
+                        "end_ms": int(item.start_time_ms) + int(cue["end_ms"]),
+                        "text": str(cue["text"]),
+                    }
+                )
 
     if not profile_segments:
         raise HTTPException(status_code=400, detail="Story has no effective audio after trim settings")
@@ -2021,6 +2047,16 @@ async def _render_story_vibetube_internal(
         background_color=data.background_color if data.use_background_color else None,
         background_image_path=story_background_image_path,
         text=story_text,
+        subtitle_enabled=data.subtitle_enabled,
+        subtitle_style=data.subtitle_style,
+        subtitle_text_color=data.subtitle_text_color,
+        subtitle_outline_color=data.subtitle_outline_color,
+        subtitle_outline_width=data.subtitle_outline_width,
+        subtitle_font_family=data.subtitle_font_family,
+        subtitle_bold=data.subtitle_bold,
+        subtitle_italic=data.subtitle_italic,
+        story_layout_style=data.story_layout_style,
+        subtitle_cues=story_subtitle_cues,
     )
 
     source_text_preview = story_text.strip()[:1000] if story_text.strip() else None
