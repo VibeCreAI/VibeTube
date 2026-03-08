@@ -379,24 +379,6 @@ def _ensure_vibetube_job_captions(job_dir: Path) -> Path:
         except Exception:
             meta = {}
 
-    source_text = str(meta.get("source_text_preview") or "").strip()
-    duration_sec = meta.get("duration_sec")
-    try:
-        duration_value = float(duration_sec)
-    except (TypeError, ValueError):
-        duration_value = 0.0
-
-    # Prefer regenerating from source metadata when available so caption timing
-    # reflects the latest subtitle writer logic for both new and existing jobs.
-    if source_text and duration_value > 0:
-        vibetube._write_srt(text=source_text, duration_sec=duration_value, out_path=captions_path)
-        meta["captions"] = captions_path.name
-        try:
-            meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
-        except Exception:
-            pass
-        return captions_path
-
     if captions_path.exists():
         return captions_path
 
@@ -406,6 +388,23 @@ def _ensure_vibetube_job_captions(job_dir: Path) -> Path:
         named_path = job_dir / captions_name
         if named_path.exists():
             return named_path
+
+    source_text = str(meta.get("source_text_preview") or "").strip()
+    duration_sec = meta.get("duration_sec")
+    try:
+        duration_value = float(duration_sec)
+    except (TypeError, ValueError):
+        duration_value = 0.0
+
+    # Fallback only for older jobs that do not already have a saved captions file.
+    if source_text and duration_value > 0:
+        vibetube._write_srt(text=source_text, duration_sec=duration_value, out_path=captions_path)
+        meta["captions"] = captions_path.name
+        try:
+            meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+        return captions_path
 
     raise FileNotFoundError("No subtitle data found for this render job.")
 

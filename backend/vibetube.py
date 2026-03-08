@@ -343,6 +343,9 @@ def render_story_overlay(
         "story_layout": {
             "style": story_layout_style,
         },
+        "profile_names": {
+            "enabled": show_profile_names,
+        },
     }
     meta_path = output_dir / "meta.json"
     meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
@@ -506,6 +509,9 @@ def render_overlay(
             "font_family": subtitle_font_family if subtitle_enabled else None,
             "bold": subtitle_bold if subtitle_enabled else None,
             "italic": subtitle_italic if subtitle_enabled else None,
+        },
+        "profile_names": {
+            "enabled": show_profile_names,
         },
     }
     meta_path = output_dir / "meta.json"
