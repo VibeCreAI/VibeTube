@@ -128,6 +128,7 @@ export function StoryBatchCreateDialog({ open, onOpenChange }: StoryBatchCreateD
   const [importWarnings, setImportWarnings] = useState<string[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [progressMessage, setProgressMessage] = useState('');
+  const [pastedJson, setPastedJson] = useState('');
 
   const defaultProfileName = useMemo(
     () => (profiles?.length === 1 ? profiles[0].name : ''),
@@ -177,6 +178,7 @@ export function StoryBatchCreateDialog({ open, onOpenChange }: StoryBatchCreateD
     setRenderSettingsOverride(undefined);
     setImportWarnings([]);
     setProgressMessage('');
+    setPastedJson('');
     setRows([createRow(defaultProfileName), createRow(defaultProfileName)]);
   };
 
@@ -219,13 +221,8 @@ export function StoryBatchCreateDialog({ open, onOpenChange }: StoryBatchCreateD
     );
   };
 
-  const handleJsonFileSelected = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    event.target.value = '';
-    if (!file) return;
-
+  const importJsonText = (rawText: string) => {
     try {
-      const rawText = await file.text();
       const parsed = JSON.parse(rawText) as StoryBatchCreateRequest;
 
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -241,6 +238,7 @@ export function StoryBatchCreateDialog({ open, onOpenChange }: StoryBatchCreateD
       }
 
       populateFromJson(parsed);
+      setPastedJson(rawText);
 
       toast({
         title: 'JSON imported',
@@ -253,6 +251,27 @@ export function StoryBatchCreateDialog({ open, onOpenChange }: StoryBatchCreateD
         variant: 'destructive',
       });
     }
+  };
+
+  const handleJsonFileSelected = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    importJsonText(await file.text());
+  };
+
+  const handlePasteJson = () => {
+    if (!pastedJson.trim()) {
+      toast({
+        title: 'JSON required',
+        description: 'Paste story JSON first.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    importJsonText(pastedJson);
   };
 
   const handleCopyGuide = async () => {
@@ -481,6 +500,28 @@ export function StoryBatchCreateDialog({ open, onOpenChange }: StoryBatchCreateD
           {importWarnings.length > 0 && (
             <div className="text-sm text-destructive">{importWarnings.join(' | ')}</div>
           )}
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="bulk-story-json">Paste JSON</Label>
+          <Textarea
+            id="bulk-story-json"
+            value={pastedJson}
+            onChange={(e) => setPastedJson(e.target.value)}
+            disabled={isSubmitting}
+            className="min-h-36 font-mono text-xs"
+            placeholder='Paste story JSON here, then click "Apply JSON".'
+          />
+          <div className="flex justify-end">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handlePasteJson}
+              disabled={isSubmitting}
+            >
+              Apply JSON
+            </Button>
+          </div>
         </div>
 
         <div className="grid gap-4 md:grid-cols-2">
