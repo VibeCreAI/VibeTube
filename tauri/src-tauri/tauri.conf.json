@@ -59,7 +59,7 @@
       "open": true
     },
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEUxRENBQkRBQjdBNTM1OTIKUldTU05hVzMycXZjNGJGcUxmcVVocll2QjdSaTJNdlFxR2M3VDJsMnVvbDdyZGRPMmRlOW9aWTcK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFCMjAwMDk4NTAyMDlDQjAKUldTd25DQlFtQUFncXhvTnZJSWE1WEZINTd6TjRzeHJOTXlsMTBoNFA0SlZOYVBYRzR0K2ZOa2kK",
       "endpoints": ["https://github.com/VibeCreAI/vibetube/releases/latest/download/latest.json"]
     }
   }
