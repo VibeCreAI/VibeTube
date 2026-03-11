@@ -423,6 +423,54 @@ fn is_process_running(pid: u32) -> bool {
     false
 }
 
+#[cfg(windows)]
+fn list_windows_process_ids_by_image(image_name: &str) -> Vec<u32> {
+    use std::process::Command;
+    let Ok(output) = Command::new("tasklist")
+        .args(["/FI", &format!("IMAGENAME eq {}", image_name), "/FO", "CSV", "/NH"])
+        .output()
+    else {
+        return Vec::new();
+    };
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with("INFO:") {
+                return None;
+            }
+
+            let columns: Vec<&str> = line.split("\",\"").collect();
+            if columns.len() < 2 {
+                return None;
+            }
+
+            columns[1].trim_matches('"').parse::<u32>().ok()
+        })
+        .collect()
+}
+
+#[cfg(windows)]
+fn find_windows_listening_pids(port: u16) -> Vec<u32> {
+    use std::process::Command;
+    let Ok(output) = Command::new("netstat").args(["-ano"]).output() else {
+        return Vec::new();
+    };
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| line.contains(&format!(":{}", port)) && line.contains("LISTENING"))
+        .filter_map(|line| line.split_whitespace().last()?.parse::<u32>().ok())
+        .collect()
+}
+
+#[cfg(windows)]
+fn is_vibetube_server_running() -> bool {
+    !find_windows_listening_pids(SERVER_PORT).is_empty()
+        || !list_windows_process_ids_by_image("vibetube-server.exe").is_empty()
+}
+
 /// Kill entire Windows process tree by enumerating children
 #[cfg(windows)]
 fn kill_windows_process_tree(parent_pid: u32) -> Result<(), String> {
@@ -443,91 +491,167 @@ fn kill_windows_process_tree(parent_pid: u32) -> Result<(), String> {
     }
 }
 
-#[command]
-async fn stop_server(state: State<'_, ServerState>) -> Result<(), String> {
-    let pid = state.server_pid.lock().unwrap().take();
-    let _child = state.child.lock().unwrap().take();
-    
-    if let Some(pid) = pid {
-        println!("stop_server: Killing server process group with PID: {}", pid);
-        
-        #[cfg(unix)]
-        {
+#[cfg(windows)]
+fn wait_for_windows_server_exit(tracked_pid: Option<u32>, timeout_ms: u64) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+
+    loop {
+        let tracked_running = tracked_pid.is_some_and(is_process_running);
+        let listener_pids = find_windows_listening_pids(SERVER_PORT);
+        let image_pids = list_windows_process_ids_by_image("vibetube-server.exe");
+
+        if !tracked_running && listener_pids.is_empty() && image_pids.is_empty() {
+            return true;
+        }
+
+        if std::time::Instant::now() >= deadline {
+            println!(
+                "Windows shutdown wait timed out. tracked_pid={:?}, listener_pids={:?}, image_pids={:?}",
+                tracked_pid, listener_pids, image_pids
+            );
+            return false;
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
+#[cfg(windows)]
+fn shutdown_windows_server_processes(tracked_pid: Option<u32>) -> Result<(), String> {
+    use std::process::Command;
+
+    println!(
+        "Windows shutdown starting. tracked_pid={:?}, listener_pids={:?}, image_pids={:?}",
+        tracked_pid,
+        find_windows_listening_pids(SERVER_PORT),
+        list_windows_process_ids_by_image("vibetube-server.exe")
+    );
+
+    println!("Attempting graceful shutdown via HTTP...");
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .map_err(|e| format!("Failed to create shutdown HTTP client: {}", e))?;
+
+    let shutdown_result = client
+        .post(&format!("http://127.0.0.1:{}/shutdown", SERVER_PORT))
+        .send();
+
+    if shutdown_result.is_ok() {
+        println!("HTTP shutdown sent, waiting for graceful exit...");
+        if wait_for_windows_server_exit(tracked_pid, 3000) {
+            println!("Server exited gracefully");
+            return Ok(());
+        }
+        println!("Graceful shutdown timed out, forcing kill...");
+    } else {
+        println!("HTTP shutdown failed, forcing kill...");
+    }
+
+    if let Some(pid) = tracked_pid {
+        println!("Killing tracked process tree for PID {}...", pid);
+        if let Err(error) = kill_windows_process_tree(pid) {
+            eprintln!("Failed to kill tracked PID {}: {}", pid, error);
+        }
+    } else {
+        println!("No tracked PID available for process-tree kill");
+    }
+
+    for pid in find_windows_listening_pids(SERVER_PORT) {
+        if Some(pid) == tracked_pid {
+            continue;
+        }
+
+        println!("Killing listener process tree for PID {}...", pid);
+        if let Err(error) = kill_windows_process_tree(pid) {
+            eprintln!("Failed to kill listener PID {}: {}", pid, error);
+        }
+    }
+
+    if wait_for_windows_server_exit(tracked_pid, 1500) {
+        println!("Server stopped after process-tree kill");
+        return Ok(());
+    }
+
+    let remaining_image_pids = list_windows_process_ids_by_image("vibetube-server.exe");
+    if !remaining_image_pids.is_empty() || !find_windows_listening_pids(SERVER_PORT).is_empty() {
+        println!(
+            "Killing remaining vibetube-server.exe processes by image name: {:?}",
+            remaining_image_pids
+        );
+        let output = Command::new("taskkill")
+            .args(["/IM", "vibetube-server.exe", "/T", "/F"])
+            .output()
+            .map_err(|e| format!("Failed to execute image-name taskkill: {}", e))?;
+
+        if !output.status.success() {
+            eprintln!(
+                "Image-name taskkill returned non-zero exit code: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+
+    if wait_for_windows_server_exit(tracked_pid, 1500) {
+        println!("Server stopped after image-name cleanup");
+        return Ok(());
+    }
+
+    Err(format!(
+        "Failed to fully stop vibetube-server. Remaining listener_pids={:?}, image_pids={:?}",
+        find_windows_listening_pids(SERVER_PORT),
+        list_windows_process_ids_by_image("vibetube-server.exe")
+    ))
+}
+
+fn clear_server_state(state: &ServerState) {
+    *state.server_pid.lock().unwrap() = None;
+    *state.child.lock().unwrap() = None;
+}
+
+fn shutdown_server_processes(state: &ServerState) -> Result<(), String> {
+    let pid = *state.server_pid.lock().unwrap();
+
+    #[cfg(unix)]
+    {
+        if let Some(pid) = pid {
+            println!("Killing server process group with PID: {}", pid);
             use std::process::Command;
-            // Kill process group with SIGTERM first
             let _ = Command::new("kill")
                 .args(["-TERM", "--", &format!("-{}", pid)])
                 .output();
-            
-            // Brief wait then force kill
+
             std::thread::sleep(std::time::Duration::from_millis(100));
-            
+
             let _ = Command::new("kill")
                 .args(["-9", "--", &format!("-{}", pid)])
                 .output();
             let _ = Command::new("kill")
                 .args(["-9", &pid.to_string()])
                 .output();
-        }
-        
-        #[cfg(windows)]
-        {
-            // Layer 1: Try graceful HTTP shutdown first
-            println!("Attempting graceful shutdown via HTTP...");
-            let client = reqwest::blocking::Client::builder()
-                .timeout(std::time::Duration::from_secs(2))
-                .build()
-                .unwrap();
 
-            let shutdown_result = client
-                .post(&format!("http://127.0.0.1:{}/shutdown", SERVER_PORT))
-                .send();
-
-            if shutdown_result.is_ok() {
-                println!("HTTP shutdown sent, waiting for graceful exit...");
-                // Wait up to 3 seconds for graceful shutdown
-                for i in 0..30 {
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                    if !is_process_running(pid) {
-                        println!("Process exited gracefully after {}ms", i * 100);
-                        return Ok(());
-                    }
-                }
-                println!("Graceful shutdown timed out, forcing kill...");
-            } else {
-                println!("HTTP shutdown failed, forcing kill...");
-            }
-
-            // Layer 2: Kill process tree with enumeration
-            println!("Killing process tree for wrapper PID {}...", pid);
-            kill_windows_process_tree(pid)?;
-
-            // Layer 3: Verify and kill by name if still running
-            std::thread::sleep(std::time::Duration::from_millis(200));
-            if is_process_running(pid) {
-                println!("Process tree kill failed, killing by name...");
-                use std::process::Command;
-                let _ = Command::new("taskkill")
-                    .args(["/IM", "vibetube-server.exe", "/T", "/F"])
-                    .output();
-            }
-
-            // Layer 4: Final verification
-            std::thread::sleep(std::time::Duration::from_millis(200));
-            if is_process_running(pid) {
-                eprintln!("WARNING: Failed to kill server after all attempts");
-            } else {
-                println!("Server killed successfully");
-            }
-        }
-
-        #[cfg(unix)]
-        {
-            println!("stop_server: Process group kill completed");
+            println!("Server process group kill completed");
+        } else {
+            println!("No server PID found (already stopped or never started)");
         }
     }
-    
+
+    #[cfg(windows)]
+    {
+        if pid.is_some() || is_vibetube_server_running() {
+            shutdown_windows_server_processes(pid)?;
+        } else {
+            println!("No tracked or running vibetube-server found");
+        }
+    }
+
+    clear_server_state(state);
     Ok(())
+}
+
+#[command]
+async fn stop_server(state: State<'_, ServerState>) -> Result<(), String> {
+    shutdown_server_processes(&state)
 }
 
 #[command]
@@ -634,17 +758,8 @@ pub fn run() {
                 // Prevent automatic close
                 api.prevent_close();
 
-                // Emit event to frontend to check setting and stop server if needed
-                let app_handle = window.app_handle();
-
-                if let Err(e) = app_handle.emit("window-close-requested", ()) {
-                    eprintln!("Failed to emit window-close-requested event: {}", e);
-                    // If event emission fails, allow close anyway
-                    window.close().ok();
-                    return;
-                }
-
                 // Set up listener for frontend response
+                let app_handle = window.app_handle();
                 let window_for_close = window.clone();
                 let (tx, mut rx) = mpsc::unbounded_channel::<()>();
 
@@ -654,6 +769,15 @@ pub fn run() {
                     // Signal that we can close
                     let _ = tx.send(());
                 });
+
+                // Emit event to frontend to check setting and stop server if needed
+                if let Err(e) = app_handle.emit("window-close-requested", ()) {
+                    eprintln!("Failed to emit window-close-requested event: {}", e);
+                    window.unlisten(listener_id);
+                    // If event emission fails, allow close anyway
+                    window.close().ok();
+                    return;
+                }
 
                 // Wait for frontend response or timeout
                 tokio::spawn(async move {
@@ -685,109 +809,8 @@ pub fn run() {
                     println!("keep_running_on_close = {}", keep_running);
                     
                     if !keep_running {
-                        // Get the stored PID for process group killing
-                        let pid = state.server_pid.lock().unwrap().take();
-                        // Also take the child to clean up
-                        let _child = state.child.lock().unwrap().take();
-                        
-                        if let Some(pid) = pid {
-                            println!("Killing server process group with PID: {}", pid);
-                            
-                            // Kill the entire process group on Unix systems
-                            // Using negative PID sends signal to all processes in the group
-                            #[cfg(unix)]
-                            {
-                                use std::process::Command;
-                                // First try SIGTERM to the process group
-                                let pgid_kill = Command::new("kill")
-                                    .args(["-TERM", "--", &format!("-{}", pid)])
-                                    .output();
-                                
-                                match pgid_kill {
-                                    Ok(output) => {
-                                        if output.status.success() {
-                                            println!("SIGTERM sent to process group -{}", pid);
-                                        } else {
-                                            // Process group kill failed, try direct kill
-                                            println!("Process group kill failed, trying direct kill");
-                                            let _ = Command::new("kill")
-                                                .args(["-TERM", &pid.to_string()])
-                                                .output();
-                                        }
-                                    }
-                                    Err(e) => {
-                                        eprintln!("Failed to execute kill command: {}", e);
-                                    }
-                                }
-                                
-                                // Give it a moment, then force kill if needed
-                                std::thread::sleep(std::time::Duration::from_millis(100));
-                                
-                                // Force kill with SIGKILL
-                                let _ = Command::new("kill")
-                                    .args(["-9", "--", &format!("-{}", pid)])
-                                    .output();
-                                let _ = Command::new("kill")
-                                    .args(["-9", &pid.to_string()])
-                                    .output();
-                                
-                                println!("Server process group kill completed");
-                            }
-                            
-                            #[cfg(windows)]
-                            {
-                                // Layer 1: Try graceful HTTP shutdown first
-                                println!("Attempting graceful shutdown via HTTP...");
-                                let client = reqwest::blocking::Client::builder()
-                                    .timeout(std::time::Duration::from_secs(2))
-                                    .build()
-                                    .unwrap();
-
-                                let shutdown_result = client
-                                    .post(&format!("http://127.0.0.1:{}/shutdown", SERVER_PORT))
-                                    .send();
-
-                                if shutdown_result.is_ok() {
-                                    println!("HTTP shutdown sent, waiting for graceful exit...");
-                                    // Wait up to 3 seconds for graceful shutdown
-                                    for i in 0..30 {
-                                        std::thread::sleep(std::time::Duration::from_millis(100));
-                                        if !is_process_running(pid) {
-                                            println!("Process exited gracefully after {}ms", i * 100);
-                                            println!("Server process tree kill completed");
-                                            return;
-                                        }
-                                    }
-                                    println!("Graceful shutdown timed out, forcing kill...");
-                                } else {
-                                    println!("HTTP shutdown failed, forcing kill...");
-                                }
-
-                                // Layer 2: Kill process tree with enumeration
-                                println!("Killing process tree for wrapper PID {}...", pid);
-                                let _ = kill_windows_process_tree(pid);
-
-                                // Layer 3: Verify and kill by name if still running
-                                std::thread::sleep(std::time::Duration::from_millis(200));
-                                if is_process_running(pid) {
-                                    println!("Process tree kill failed, killing by name...");
-                                    use std::process::Command;
-                                    let _ = Command::new("taskkill")
-                                        .args(["/IM", "vibetube-server.exe", "/T", "/F"])
-                                        .output();
-                                }
-
-                                // Layer 4: Final verification
-                                std::thread::sleep(std::time::Duration::from_millis(200));
-                                if is_process_running(pid) {
-                                    eprintln!("WARNING: Failed to kill server after all attempts");
-                                } else {
-                                    println!("Server killed successfully");
-                                }
-                                println!("Server process tree kill completed");
-                            }
-                        } else {
-                            println!("No server PID found (already stopped or never started)");
+                        if let Err(error) = shutdown_server_processes(&state) {
+                            eprintln!("Failed to stop server during app exit: {}", error);
                         }
                     } else {
                         println!("Keeping server running per user setting");

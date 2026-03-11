@@ -1,6 +1,7 @@
 import { relaunch } from '@tauri-apps/plugin-process';
 import { check, type Update } from '@tauri-apps/plugin-updater';
 import type { PlatformUpdater, UpdateStatus } from '@/platform/types';
+import { tauriLifecycle } from './lifecycle';
 
 // Check if we're on Windows (NSIS installer handles restart automatically)
 const isWindows = () => {
@@ -144,6 +145,14 @@ class TauriUpdater implements PlatformUpdater {
     try {
       this.status = { ...this.status, installing: true, error: undefined };
       this.notifySubscribers();
+
+      const appWindow = window as Window & { __vibetubeServerStartedByApp?: boolean };
+      const serverStartedByApp = appWindow.__vibetubeServerStartedByApp ?? false;
+      if (serverStartedByApp) {
+        await tauriLifecycle.stopServer();
+        appWindow.__vibetubeServerStartedByApp = false;
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
 
       await this.update.install();
 
