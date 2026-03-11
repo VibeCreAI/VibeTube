@@ -15,6 +15,7 @@ const SERVER_PORT: u16 = 17493;
 struct ServerState {
     child: Mutex<Option<tauri_plugin_shell::process::CommandChild>>,
     server_pid: Mutex<Option<u32>>,
+    job_handle: Mutex<Option<isize>>,
     keep_running_on_close: Mutex<bool>,
 }
 
@@ -46,8 +47,7 @@ async fn start_server(
                     if command.contains("vibetube") {
                         if let Ok(pid) = pid_str.parse::<u32>() {
                             println!("Found existing vibetube-server on port {} (PID: {}), reusing it", SERVER_PORT, pid);
-                            // Store the PID so we can kill it on exit if needed
-                            *state.server_pid.lock().unwrap() = Some(pid);
+                            track_server_process(&state, pid);
                             return Ok(format!("http://127.0.0.1:{}", SERVER_PORT));
                         }
                     }
@@ -75,8 +75,7 @@ async fn start_server(
                                 let tasklist_str = String::from_utf8_lossy(&tasklist_output.stdout);
                                 if tasklist_str.to_lowercase().contains("vibetube") {
                                     println!("Found existing vibetube-server on port {} (PID: {}), reusing it", SERVER_PORT, pid);
-                                    // Store the PID so we can kill it on exit if needed
-                                    *state.server_pid.lock().unwrap() = Some(pid);
+                                    track_server_process(&state, pid);
                                     return Ok(format!("http://127.0.0.1:{}", SERVER_PORT));
                                 }
                             }
@@ -278,8 +277,8 @@ async fn start_server(
 
     // Store child process and PID
     let process_pid = child.pid();
-    *state.server_pid.lock().unwrap() = Some(process_pid);
     *state.child.lock().unwrap() = Some(child);
+    track_server_process(&state, process_pid);
 
     // Wait for server to be ready by listening for startup log
     // PyInstaller bundles can be slow on first import, especially torch/transformers
@@ -421,6 +420,101 @@ fn is_process_running(pid: u32) -> bool {
         return !output_str.trim().is_empty() && output_str.contains(&pid.to_string());
     }
     false
+}
+
+#[cfg(windows)]
+fn close_windows_job_handle(raw_handle: isize) {
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+
+    unsafe {
+        let _ = CloseHandle(HANDLE(raw_handle as *mut core::ffi::c_void));
+    }
+}
+
+#[cfg(windows)]
+fn create_windows_job_for_pid(pid: u32) -> Result<isize, String> {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject,
+        JobObjectExtendedLimitInformation, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    use windows::Win32::System::Threading::{
+        OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
+    };
+
+    unsafe {
+        let job = CreateJobObjectW(None, None)
+            .map_err(|e| format!("CreateJobObjectW failed for PID {}: {}", pid, e))?;
+
+        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+
+        if let Err(error) = SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &limits as *const _ as *const core::ffi::c_void,
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        ) {
+            let _ = CloseHandle(job);
+            return Err(format!(
+                "SetInformationJobObject failed for PID {}: {}",
+                pid, error
+            ));
+        }
+
+        let process = OpenProcess(
+            PROCESS_SET_QUOTA | PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION,
+            false,
+            pid,
+        )
+        .map_err(|e| {
+            let _ = CloseHandle(job);
+            format!("OpenProcess failed for PID {}: {}", pid, e)
+        })?;
+
+        if let Err(error) = AssignProcessToJobObject(job, process) {
+            let _ = CloseHandle(process);
+            let _ = CloseHandle(job);
+            return Err(format!(
+                "AssignProcessToJobObject failed for PID {}: {}",
+                pid, error
+            ));
+        }
+
+        let _ = CloseHandle(process);
+        Ok(job.0 as isize)
+    }
+}
+
+#[cfg(windows)]
+fn replace_windows_job_handle(state: &ServerState, new_handle: Option<isize>) {
+    let mut job_handle = state.job_handle.lock().unwrap();
+    if let Some(existing_handle) = job_handle.take() {
+        close_windows_job_handle(existing_handle);
+    }
+    *job_handle = new_handle;
+}
+
+fn track_server_process(state: &ServerState, pid: u32) {
+    *state.server_pid.lock().unwrap() = Some(pid);
+
+    #[cfg(windows)]
+    {
+        match create_windows_job_for_pid(pid) {
+            Ok(job_handle) => {
+                println!(
+                    "Assigned vibetube-server PID {} to Windows job object {}",
+                    pid, job_handle
+                );
+                replace_windows_job_handle(state, Some(job_handle));
+            }
+            Err(error) => {
+                eprintln!("Failed to assign vibetube-server PID {} to job object: {}", pid, error);
+                replace_windows_job_handle(state, None);
+            }
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -607,6 +701,9 @@ fn shutdown_windows_server_processes(tracked_pid: Option<u32>) -> Result<(), Str
 fn clear_server_state(state: &ServerState) {
     *state.server_pid.lock().unwrap() = None;
     *state.child.lock().unwrap() = None;
+
+    #[cfg(windows)]
+    replace_windows_job_handle(state, None);
 }
 
 fn shutdown_server_processes(state: &ServerState) -> Result<(), String> {
@@ -711,6 +808,7 @@ pub fn run() {
         .manage(ServerState {
             child: Mutex::new(None),
             server_pid: Mutex::new(None),
+            job_handle: Mutex::new(None),
             keep_running_on_close: Mutex::new(false),
         })
         .manage(audio_capture::AudioCaptureState::new())
