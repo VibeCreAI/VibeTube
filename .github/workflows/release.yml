@@ -14,18 +14,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: "macos-latest"
-            args: "--target aarch64-apple-darwin"
-            python-version: "3.12"
-            backend: "mlx"
-          - platform: "macos-15-intel"
-            args: "--target x86_64-apple-darwin"
-            python-version: "3.12"
-            backend: "pytorch"
-          # - platform: 'ubuntu-22.04'
-          #   args: ''
-          #   python-version: '3.12'
-          #   backend: 'pytorch'
           - platform: "windows-latest"
             args: ""
             python-version: "3.12"
