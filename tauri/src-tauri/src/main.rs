@@ -775,7 +775,7 @@ pub fn run() {
                     eprintln!("Failed to emit window-close-requested event: {}", e);
                     window.unlisten(listener_id);
                     // If event emission fails, allow close anyway
-                    window.close().ok();
+                    window.destroy().ok();
                     return;
                 }
 
@@ -784,12 +784,12 @@ pub fn run() {
                     tokio::select! {
                         _ = rx.recv() => {
                             // Frontend responded, close window
-                            window_for_close.close().ok();
+                            window_for_close.destroy().ok();
                         }
                         _ = tokio::time::sleep(tokio::time::Duration::from_secs(5)) => {
                             // Timeout - close anyway
                             eprintln!("Window close timeout, closing anyway");
-                            window_for_close.close().ok();
+                            window_for_close.destroy().ok();
                         }
                     }
                     // Clean up listener
