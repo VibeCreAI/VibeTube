@@ -24,14 +24,14 @@ Copy the content from `~/.tauri/VibeTube.key.pub` and replace the placeholder in
     "updater": {
       "pubkey": "PASTE_PUBLIC_KEY_CONTENT_HERE",
       "endpoints": [
-        "https://github.com/YOUR_USERNAME/VibeTube/releases/latest/download/latest.json"
+        "https://github.com/VibeCreAI/VibeTube/releases/latest/download/latest.json"
       ]
     }
   }
 }
 ```
 
-Update the endpoint URL with your actual GitHub username/organization.
+For the production updater channel, keep the endpoint pointed at `VibeCreAI/VibeTube`.
 
 ## 3. Building with Signatures
 
@@ -73,19 +73,19 @@ When you create a GitHub release, the build process will generate:
   "platforms": {
     "darwin-aarch64": {
       "signature": "CONTENT_FROM_.app.tar.gz.sig",
-      "url": "https://github.com/YOUR_USERNAME/VibeTube/releases/download/v0.2.0/VibeTube_0.2.0_aarch64.dmg"
+      "url": "https://github.com/VibeCreAI/VibeTube/releases/download/v0.2.0/VibeTube_0.2.0_aarch64.dmg"
     },
     "darwin-x86_64": {
       "signature": "CONTENT_FROM_.app.tar.gz.sig",
-      "url": "https://github.com/YOUR_USERNAME/VibeTube/releases/download/v0.2.0/VibeTube_0.2.0_x64.dmg"
+      "url": "https://github.com/VibeCreAI/VibeTube/releases/download/v0.2.0/VibeTube_0.2.0_x64.dmg"
     },
     "linux-x86_64": {
       "signature": "CONTENT_FROM_.AppImage.sig",
-      "url": "https://github.com/YOUR_USERNAME/VibeTube/releases/download/v0.2.0/VibeTube_0.2.0_amd64.AppImage"
+      "url": "https://github.com/VibeCreAI/VibeTube/releases/download/v0.2.0/VibeTube_0.2.0_amd64.AppImage"
     },
     "windows-x86_64": {
       "signature": "CONTENT_FROM_.msi.sig",
-      "url": "https://github.com/YOUR_USERNAME/VibeTube/releases/download/v0.2.0/VibeTube_0.2.0_x64_en-US.msi"
+      "url": "https://github.com/VibeCreAI/VibeTube/releases/download/v0.2.0/VibeTube_0.2.0_x64_en-US.msi"
     }
   }
 }

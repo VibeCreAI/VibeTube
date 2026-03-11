@@ -21,18 +21,18 @@ bun run generate:keys
 ```
 
 This creates:
-- Private key: `~/.tauri/vibetube.key` (keep secret!)
-- Public key: `~/.tauri/vibetube.key.pub` (safe to share)
+- Private key: `~/.tauri/VibeTube.key` (keep secret!)
+- Public key: `~/.tauri/VibeTube.key.pub` (safe to share)
 
 ### 2. Update Tauri Config
 
 Open `tauri/src-tauri/tauri.conf.json` and:
 
-1. Replace `"REPLACE_WITH_YOUR_PUBLIC_KEY"` with the content from `~/.tauri/vibetube.key.pub`
-2. Update the endpoint URL with your GitHub username:
+1. Replace the updater `pubkey` with the content from `~/.tauri/VibeTube.key.pub`
+2. Confirm the endpoint URL points to the official VibeTube repo:
    ```json
    "endpoints": [
-     "https://github.com/YOUR_USERNAME/vibetube/releases/latest/download/latest.json"
+     "https://github.com/VibeCreAI/VibeTube/releases/latest/download/latest.json"
    ]
    ```
 
@@ -42,7 +42,7 @@ Go to your repo Settings → Secrets and variables → Actions:
 
 1. Add `TAURI_SIGNING_PRIVATE_KEY`:
    ```bash
-   cat ~/.tauri/vibetube.key
+   cat ~/.tauri/VibeTube.key
    ```
    Copy the entire output and paste as the secret value
 
@@ -89,7 +89,7 @@ This will verify your keys are set up correctly.
 ## Troubleshooting
 
 **"Public key not configured"**
-- Make sure you copied the entire content from `vibetube.key.pub`
+- Make sure you copied the entire content from `VibeTube.key.pub`
 - The key should start with `dW50cnVzdGVkIGNvbW1lbnQ6`
 
 **"Failed to check for updates"**
@@ -98,7 +98,7 @@ This will verify your keys are set up correctly.
 
 **Build fails with signing error**
 - Check that GitHub secrets are set correctly
-- Verify private key file exists at `~/.tauri/vibetube.key`
+- Verify private key file exists at `~/.tauri/VibeTube.key`
 
 ## Next Release Workflow
 

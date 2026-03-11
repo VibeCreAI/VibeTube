@@ -16,7 +16,7 @@
     "build:web": "cd web && bun run build",
     "build:release": "./scripts/prepare-release.sh",
     "generate:api": "./scripts/generate-api.sh",
-    "generate:keys": "cd tauri && bun tauri signer generate -w ~/.tauri/vibetube.key",
+    "generate:keys": "cd tauri && bun tauri signer generate -w ~/.tauri/VibeTube.key",
     "build:server": "./scripts/build-server.sh",
     "update:icons": "./scripts/update-icons.sh",
     "convert:assets": "./scripts/convert-assets.sh",

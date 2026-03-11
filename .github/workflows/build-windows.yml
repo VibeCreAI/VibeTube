@@ -32,8 +32,8 @@ jobs:
 
           PLATFORM=$(rustc --print host-tuple)
           mkdir -p ../tauri/src-tauri/binaries
-          cp dist/voicebox-server.exe ../tauri/src-tauri/binaries/voicebox-server-${PLATFORM}.exe
-          echo "Built voicebox-server-${PLATFORM}.exe"
+          cp dist/vibetube-server.exe ../tauri/src-tauri/binaries/vibetube-server-${PLATFORM}.exe
+          echo "Built vibetube-server-${PLATFORM}.exe"
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -55,7 +55,7 @@ jobs:
         with:
           projectPath: tauri
           tagName: v__VERSION__
-          releaseName: "voicebox v__VERSION__ (test build)"
+          releaseName: "VibeTube v__VERSION__ (test build)"
           releaseBody: "Test build for audio export fix"
           releaseDraft: true
           prerelease: true

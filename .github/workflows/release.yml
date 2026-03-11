@@ -92,8 +92,8 @@ jobs:
           mkdir -p ../tauri/src-tauri/binaries
 
           # Copy with platform suffix
-          cp dist/voicebox-server.exe ../tauri/src-tauri/binaries/voicebox-server-${PLATFORM}.exe
-          echo "Built voicebox-server-${PLATFORM}.exe"
+          cp dist/vibetube-server.exe ../tauri/src-tauri/binaries/vibetube-server-${PLATFORM}.exe
+          echo "Built vibetube-server-${PLATFORM}.exe"
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -131,7 +131,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
           ENABLE_CODE_SIGNING: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -142,7 +142,7 @@ jobs:
         with:
           projectPath: tauri
           tagName: v__VERSION__
-          releaseName: "voicebox v__VERSION__"
+          releaseName: "VibeTube v__VERSION__"
           releaseBody: |
             ## What's Changed
             See the assets below to download and install this version.
