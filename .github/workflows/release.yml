@@ -136,7 +136,7 @@ jobs:
             See the assets below to download and install this version.
 
             ### Installation
-            - **Windows**: Download the `.msi` installer or `x64-setup.exe`
+            - **Windows**: Download the `x64-setup.exe` installer
 
             The app includes automatic updates - future updates will be installed automatically.
           releaseDraft: true
