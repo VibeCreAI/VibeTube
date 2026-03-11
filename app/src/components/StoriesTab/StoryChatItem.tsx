@@ -19,10 +19,12 @@ interface StoryChatItemProps {
   storyId: string;
   index: number;
   onPlayFromHere: () => void;
+  onSelect?: () => void;
   onRemove: () => void;
   onRegenerate: () => void;
   currentTimeMs: number;
   isPlaying: boolean;
+  isSelected?: boolean;
   dragHandleProps?: React.HTMLAttributes<HTMLButtonElement>;
   isDragging?: boolean;
   isRegenerating?: boolean;
@@ -31,10 +33,12 @@ interface StoryChatItemProps {
 export function StoryChatItem({
   item,
   onPlayFromHere,
+  onSelect,
   onRemove,
   onRegenerate,
   currentTimeMs,
   isPlaying,
+  isSelected = false,
   dragHandleProps,
   isDragging,
   isRegenerating,
@@ -64,13 +68,25 @@ export function StoryChatItem({
   };
 
   return (
+    /* biome-ignore lint/a11y/noStaticElementInteractions: Story item card acts as a selectable container while preserving nested controls */
     <div
       className={cn(
         'flex items-start gap-3 p-4 rounded-lg border transition-colors',
         isCurrentlyPlaying && 'bg-muted/70 border-primary',
-        !isCurrentlyPlaying && 'hover:bg-muted/50',
+        !isCurrentlyPlaying && !isSelected && 'hover:bg-muted/50',
+        isSelected && 'bg-muted/60 border-accent ring-1 ring-accent/50',
         isDragging && 'opacity-50 shadow-lg',
       )}
+      role={onSelect ? 'button' : undefined}
+      tabIndex={onSelect ? 0 : undefined}
+      onClick={onSelect}
+      onKeyDown={(e) => {
+        if (!onSelect) return;
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
     >
       {/* Drag Handle */}
       {dragHandleProps && (

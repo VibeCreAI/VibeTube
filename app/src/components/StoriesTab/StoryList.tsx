@@ -176,7 +176,7 @@ export function StoryList({ onOpenBatchCreate }: StoryListProps) {
   const storyList = stories || [];
 
   return (
-    <div className="flex flex-col h-full min-h-0">
+    <div className="flex flex-col h-full min-h-0 overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between gap-2 mb-4 px-1">
         <h2 className="text-2xl font-bold">Stories</h2>
@@ -193,7 +193,7 @@ export function StoryList({ onOpenBatchCreate }: StoryListProps) {
       </div>
 
       {/* Story List */}
-      <div className="flex-1 min-h-0 overflow-y-auto space-y-2">
+      <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-2">
         {storyList.length === 0 ? (
           <div className="text-center py-12 px-5 border-2 border-dashed border-muted rounded-2xl text-muted-foreground">
             <BookOpen className="h-12 w-12 mx-auto mb-4 opacity-50" />

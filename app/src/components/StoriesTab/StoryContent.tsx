@@ -14,11 +14,20 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Clapperboard, Download, Plus, Trash2 } from 'lucide-react';
+import { Clapperboard, Download, Loader2, Plus, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { Form, FormControl, FormField, FormItem, FormMessage } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
 import { apiClient } from '@/lib/api/client';
 import type {
@@ -26,6 +35,8 @@ import type {
   VibeTubeExportFormat,
   VibeTubeJobResponse,
 } from '@/lib/api/types';
+import { LANGUAGE_OPTIONS } from '@/lib/constants/languages';
+import { useGenerationForm } from '@/lib/hooks/useGenerationForm';
 import { useHistory } from '@/lib/hooks/useHistory';
 import { useProfiles } from '@/lib/hooks/useProfiles';
 import {
@@ -79,6 +90,7 @@ export function StoryContent() {
   const { toast } = useToast();
   const scrollRef = useRef<HTMLDivElement>(null);
   const [selectedStoryJobId, setSelectedStoryJobId] = useState<string | null>(null);
+  const [autoPlayStoryJobId, setAutoPlayStoryJobId] = useState<string | null>(null);
   const [isDeletingStoryRender, setIsDeletingStoryRender] = useState(false);
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [regenerateStatusMessage, setRegenerateStatusMessage] = useState('');
@@ -86,6 +98,8 @@ export function StoryContent() {
   // Add generation popover state
   const [searchQuery, setSearchQuery] = useState('');
   const [isAddOpen, setIsAddOpen] = useState(false);
+  const [addMode, setAddMode] = useState<'existing' | 'generate'>('generate');
+  const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
   const { data: historyData } = useHistory();
 
   // Filter generations not in story and matching search
@@ -154,12 +168,43 @@ export function StoryContent() {
   const isPlaying = useStoryStore((state) => state.isPlaying);
   const currentTimeMs = useStoryStore((state) => state.currentTimeMs);
   const playbackStoryId = useStoryStore((state) => state.playbackStoryId);
+  const selectedClipId = useStoryStore((state) => state.selectedClipId);
+  const setSelectedClipId = useStoryStore((state) => state.setSelectedClipId);
   const play = useStoryStore((state) => state.play);
   const seek = useStoryStore((state) => state.seek);
 
   // Refs for auto-scrolling to playing item
   const itemRefsMap = useRef<Map<string, HTMLDivElement>>(new Map());
   const lastScrolledItemRef = useRef<string | null>(null);
+
+  const {
+    form: generateForm,
+    handleSubmit: handleGenerateSubmit,
+    isPending: isGenerating,
+    statusMessage: generateStatusMessage,
+  } = useGenerationForm({
+    autoPlayAudioOnSuccess: false,
+    onSuccess: async (generationId, _generation, helpers) => {
+      if (!story) return;
+      helpers.setStatusMessage('Adding clip to story...');
+      await addStoryItem.mutateAsync({
+        storyId: story.id,
+        data: { generation_id: generationId },
+      });
+      setIsAddOpen(false);
+      setAddMode('generate');
+      toast({
+        title: 'Added to story',
+        description: 'New generation was created and added to this story.',
+      });
+    },
+  });
+
+  useEffect(() => {
+    if (!selectedProfileId && profiles && profiles.length > 0) {
+      setSelectedProfileId(profiles[0].id);
+    }
+  }, [profiles, selectedProfileId]);
 
   // Use playback hook
   useStoryPlayback(story?.items);
@@ -197,6 +242,24 @@ export function StoryContent() {
       lastScrolledItemRef.current = currentlyPlayingItemId;
     }
   }, [currentlyPlayingItemId]);
+
+  useEffect(() => {
+    if (!selectedClipId) return;
+    const element = itemRefsMap.current.get(selectedClipId);
+    if (element && scrollRef.current) {
+      const container = scrollRef.current;
+      const containerRect = container.getBoundingClientRect();
+      const elementRect = element.getBoundingClientRect();
+      const currentScrollTop = container.scrollTop;
+      const elementTop = elementRect.top - containerRect.top + currentScrollTop;
+      const centeredScrollTop = elementTop - container.clientHeight / 2 + elementRect.height / 2;
+
+      container.scrollTo({
+        top: Math.max(0, centeredScrollTop),
+        behavior: 'smooth',
+      });
+    }
+  }, [selectedClipId]);
 
   // Reset last scrolled item when playback stops
   useEffect(() => {
@@ -338,6 +401,7 @@ export function StoryContent() {
       {
         onSuccess: () => {
           setIsAddOpen(false);
+          setAddMode('generate');
           setSearchQuery('');
         },
         onError: (error) => {
@@ -349,6 +413,10 @@ export function StoryContent() {
         },
       },
     );
+  };
+
+  const handleGenerateNew = async (data: Parameters<typeof handleGenerateSubmit>[0]) => {
+    await handleGenerateSubmit(data, selectedProfileId);
   };
 
   const handlePlayFromItem = (itemStartMs: number) => {
@@ -373,9 +441,15 @@ export function StoryContent() {
         },
       },
       {
-        onSuccess: (result) => {
+        onSuccess: async (result) => {
+          await Promise.all([
+            queryClient.invalidateQueries({ queryKey: ['vibetube-jobs'] }),
+            queryClient.invalidateQueries({ queryKey: ['vibetube-jobs', story.id] }),
+          ]);
+          setSelectedStoryJobId(result.job_id);
+          setAutoPlayStoryJobId(result.job_id);
           toast({
-            title: 'VibeTube render started',
+            title: 'VibeTube render ready',
             description: `Story render completed as job ${result.job_id.slice(0, 8)}.`,
           });
         },
@@ -516,36 +590,196 @@ export function StoryContent() {
                   Add
                 </Button>
               </PopoverTrigger>
-              <PopoverContent className="w-80 p-0" align="end">
-                <div className="p-2 border-b">
-                  <Input
-                    placeholder="Search by name or transcript..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    autoFocus
-                  />
+              <PopoverContent className="w-[420px] p-0" align="start">
+                <div className="border-b p-2">
+                  <div className="grid grid-cols-2 gap-2">
+                    <Button
+                      type="button"
+                      variant={addMode === 'generate' ? 'default' : 'outline'}
+                      size="sm"
+                      onClick={() => setAddMode('generate')}
+                    >
+                      Generate New
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={addMode === 'existing' ? 'default' : 'outline'}
+                      size="sm"
+                      onClick={() => setAddMode('existing')}
+                    >
+                      Existing
+                    </Button>
+                  </div>
                 </div>
-                <div className="max-h-60 overflow-y-auto">
-                  {availableGenerations.length === 0 ? (
-                    <div className="p-4 text-center text-sm text-muted-foreground">
-                      {searchQuery ? 'No matching generations found' : 'No available generations'}
+                {addMode === 'existing' ? (
+                  <>
+                    <div className="p-2 border-b">
+                      <Input
+                        placeholder="Search by name or transcript..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        autoFocus
+                      />
                     </div>
-                  ) : (
-                    availableGenerations.map((gen) => (
-                      <button
-                        key={gen.id}
-                        type="button"
-                        className="w-full text-left px-3 py-2 hover:bg-muted transition-colors border-b last:border-b-0"
-                        onClick={() => handleAddGeneration(gen.id)}
-                      >
-                        <div className="font-medium text-sm">{gen.profile_name}</div>
-                        <div className="text-xs text-muted-foreground truncate">
-                          {gen.text.length > 50 ? `${gen.text.substring(0, 50)}...` : gen.text}
+                    <div className="max-h-60 overflow-y-auto">
+                      {availableGenerations.length === 0 ? (
+                        <div className="p-4 text-center text-sm text-muted-foreground">
+                          {searchQuery
+                            ? 'No matching generations found'
+                            : 'No available generations'}
                         </div>
-                      </button>
-                    ))
-                  )}
-                </div>
+                      ) : (
+                        availableGenerations.map((gen) => (
+                          <button
+                            key={gen.id}
+                            type="button"
+                            className="w-full text-left px-3 py-2 hover:bg-muted transition-colors border-b last:border-b-0"
+                            onClick={() => handleAddGeneration(gen.id)}
+                          >
+                            <div className="font-medium text-sm">{gen.profile_name}</div>
+                            <div className="text-xs text-muted-foreground truncate">
+                              {gen.text.length > 50 ? `${gen.text.substring(0, 50)}...` : gen.text}
+                            </div>
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <div className="p-3">
+                    <Form {...generateForm}>
+                      <form
+                        onSubmit={generateForm.handleSubmit(handleGenerateNew)}
+                        className="space-y-3"
+                      >
+                        <FormField
+                          control={generateForm.control}
+                          name="text"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormControl>
+                                <Textarea
+                                  {...field}
+                                  autoFocus
+                                  placeholder={`Generate speech for "${story.name}"...`}
+                                  className="min-h-[110px] resize-none"
+                                />
+                              </FormControl>
+                              <FormMessage className="text-xs" />
+                            </FormItem>
+                          )}
+                        />
+                        <div className="grid grid-cols-3 gap-2">
+                          <div className="space-y-1">
+                            <div className="text-xs text-muted-foreground">Voice</div>
+                            <Select
+                              value={selectedProfileId || ''}
+                              onValueChange={(value) => setSelectedProfileId(value || null)}
+                            >
+                              <SelectTrigger className="h-9 text-xs">
+                                <SelectValue placeholder="Select voice" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {profiles?.map((profile) => (
+                                  <SelectItem
+                                    key={profile.id}
+                                    value={profile.id}
+                                    className="text-xs"
+                                  >
+                                    {profile.name}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <FormField
+                            control={generateForm.control}
+                            name="language"
+                            render={({ field }) => (
+                              <FormItem className="space-y-1">
+                                <div className="text-xs text-muted-foreground">Language</div>
+                                <Select value={field.value} onValueChange={field.onChange}>
+                                  <FormControl>
+                                    <SelectTrigger className="h-9 text-xs">
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                  </FormControl>
+                                  <SelectContent>
+                                    {LANGUAGE_OPTIONS.map((lang) => (
+                                      <SelectItem
+                                        key={lang.value}
+                                        value={lang.value}
+                                        className="text-xs"
+                                      >
+                                        {lang.label}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                                <FormMessage className="text-xs" />
+                              </FormItem>
+                            )}
+                          />
+                          <FormField
+                            control={generateForm.control}
+                            name="modelSize"
+                            render={({ field }) => (
+                              <FormItem className="space-y-1">
+                                <div className="text-xs text-muted-foreground">Model</div>
+                                <Select value={field.value} onValueChange={field.onChange}>
+                                  <FormControl>
+                                    <SelectTrigger className="h-9 text-xs">
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                  </FormControl>
+                                  <SelectContent>
+                                    <SelectItem value="1.7B" className="text-xs">
+                                      Qwen3-TTS 1.7B
+                                    </SelectItem>
+                                    <SelectItem value="0.6B" className="text-xs">
+                                      Qwen3-TTS 0.6B
+                                    </SelectItem>
+                                  </SelectContent>
+                                </Select>
+                                <FormMessage className="text-xs" />
+                              </FormItem>
+                            )}
+                          />
+                        </div>
+                        <FormField
+                          control={generateForm.control}
+                          name="instruct"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormControl>
+                                <Textarea
+                                  {...field}
+                                  placeholder="Optional delivery instructions..."
+                                  className="min-h-[72px] resize-none text-sm"
+                                />
+                              </FormControl>
+                              <FormMessage className="text-xs" />
+                            </FormItem>
+                          )}
+                        />
+                        {generateStatusMessage && (
+                          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                            {isGenerating && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                            <span>{generateStatusMessage}</span>
+                          </div>
+                        )}
+                        <Button
+                          type="submit"
+                          className="w-full"
+                          disabled={isGenerating || !selectedProfileId}
+                        >
+                          {isGenerating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                          {isGenerating ? 'Generating...' : 'Generate and Add'}
+                        </Button>
+                      </form>
+                    </Form>
+                  </div>
+                )}
               </PopoverContent>
             </Popover>
             {story.items.length > 0 && (
@@ -555,7 +789,11 @@ export function StoryContent() {
                 onClick={handleRenderStoryVibeTube}
                 disabled={renderStoryVibeTube.isPending}
               >
-                <Clapperboard className="mr-2 h-4 w-4" />
+                {renderStoryVibeTube.isPending ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Clapperboard className="mr-2 h-4 w-4" />
+                )}
                 {renderStoryVibeTube.isPending ? 'Rendering...' : 'Render VibeTube'}
               </Button>
             )}
@@ -640,8 +878,19 @@ export function StoryContent() {
             {selectedStoryJob ? (
               <div className="space-y-3">
                 <video
+                  key={selectedStoryJob.job_id}
                   className="w-full rounded-lg border bg-black/60 max-h-[360px]"
+                  autoPlay={autoPlayStoryJobId === selectedStoryJob.job_id}
                   controls
+                  onLoadedData={(event) => {
+                    if (autoPlayStoryJobId !== selectedStoryJob.job_id) {
+                      return;
+                    }
+                    void event.currentTarget.play().catch(() => {
+                      // Ignore autoplay blocks and keep controls available.
+                    });
+                    setAutoPlayStoryJobId(null);
+                  }}
                   preload="metadata"
                   src={apiClient.getVibeTubePreviewUrl(selectedStoryJob.job_id)}
                 >
@@ -690,8 +939,10 @@ export function StoryContent() {
                       key={item.id}
                       ref={(el) => {
                         if (el) {
+                          itemRefsMap.current.set(item.id, el);
                           itemRefsMap.current.set(item.generation_id, el);
                         } else {
+                          itemRefsMap.current.delete(item.id);
                           itemRefsMap.current.delete(item.generation_id);
                         }
                       }}
@@ -701,8 +952,10 @@ export function StoryContent() {
                         storyId={story.id}
                         index={index}
                         onPlayFromHere={() => handlePlayFromItem(item.start_time_ms)}
+                        onSelect={() => setSelectedClipId(item.id)}
                         onRemove={() => handleRemoveItem(item.id)}
                         onRegenerate={() => handleRegenerateItem(item.id)}
+                        isSelected={selectedClipId === item.id}
                         isRegenerating={
                           regenerateItem.isPending && regenerateItem.variables?.itemId === item.id
                         }

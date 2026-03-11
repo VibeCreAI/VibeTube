@@ -12,6 +12,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import {
+  DEFAULT_VIBETUBE_RENDER_SETTINGS,
   getPersistedVibeTubeBackgroundImageData,
   loadPersistedVibeTubeBackgroundImageData,
   setPersistedVibeTubeBackgroundImageData,
@@ -30,112 +31,121 @@ const RESOLUTION_PRESETS = [
 ] as const;
 
 export function VibeTubeTab() {
-  const [fps, setFps] = usePersistedNumber(VIBETUBE_SETTING_KEYS.fps, 30);
+  const [fps, setFps] = usePersistedNumber(
+    VIBETUBE_SETTING_KEYS.fps,
+    DEFAULT_VIBETUBE_RENDER_SETTINGS.fps,
+  );
   const [resolutionPreset, setResolutionPreset] = usePersistedString(
     VIBETUBE_SETTING_KEYS.resolutionPreset,
-    'square-512',
+    DEFAULT_VIBETUBE_RENDER_SETTINGS.resolution_preset,
   );
-  const [width, setWidth] = usePersistedNumber(VIBETUBE_SETTING_KEYS.width, 512);
-  const [height, setHeight] = usePersistedNumber(VIBETUBE_SETTING_KEYS.height, 512);
+  const [width, setWidth] = usePersistedNumber(
+    VIBETUBE_SETTING_KEYS.width,
+    DEFAULT_VIBETUBE_RENDER_SETTINGS.width,
+  );
+  const [height, setHeight] = usePersistedNumber(
+    VIBETUBE_SETTING_KEYS.height,
+    DEFAULT_VIBETUBE_RENDER_SETTINGS.height,
+  );
   const [onThreshold, setOnThreshold] = usePersistedNumber(
     VIBETUBE_SETTING_KEYS.onThreshold,
-    0.024,
+    DEFAULT_VIBETUBE_RENDER_SETTINGS.on_threshold,
   );
   const [offThreshold, setOffThreshold] = usePersistedNumber(
     VIBETUBE_SETTING_KEYS.offThreshold,
-    0.016,
+    DEFAULT_VIBETUBE_RENDER_SETTINGS.off_threshold,
   );
   const [smoothingWindows, setSmoothingWindows] = usePersistedNumber(
     VIBETUBE_SETTING_KEYS.smoothingWindows,
-    3,
+    DEFAULT_VIBETUBE_RENDER_SETTINGS.smoothing_windows,
   );
   const [minHoldWindows, setMinHoldWindows] = usePersistedNumber(
     VIBETUBE_SETTING_KEYS.minHoldWindows,
-    1,
+    DEFAULT_VIBETUBE_RENDER_SETTINGS.min_hold_windows,
   );
   const [blinkMinIntervalSec, setBlinkMinIntervalSec] = usePersistedNumber(
     VIBETUBE_SETTING_KEYS.blinkMinIntervalSec,
-    3.5,
+    DEFAULT_VIBETUBE_RENDER_SETTINGS.blink_min_interval_sec,
   );
   const [blinkMaxIntervalSec, setBlinkMaxIntervalSec] = usePersistedNumber(
     VIBETUBE_SETTING_KEYS.blinkMaxIntervalSec,
-    5.5,
+    DEFAULT_VIBETUBE_RENDER_SETTINGS.blink_max_interval_sec,
   );
   const [blinkDurationFrames, setBlinkDurationFrames] = usePersistedNumber(
     VIBETUBE_SETTING_KEYS.blinkDurationFrames,
-    3,
+    DEFAULT_VIBETUBE_RENDER_SETTINGS.blink_duration_frames,
   );
   const [headMotionAmountPx, setHeadMotionAmountPx] = usePersistedNumber(
     VIBETUBE_SETTING_KEYS.headMotionAmountPx,
-    3.0,
+    DEFAULT_VIBETUBE_RENDER_SETTINGS.head_motion_amount_px,
   );
   const [headMotionChangeSec, setHeadMotionChangeSec] = usePersistedNumber(
     VIBETUBE_SETTING_KEYS.headMotionChangeSec,
-    2.8,
+    DEFAULT_VIBETUBE_RENDER_SETTINGS.head_motion_change_sec,
   );
   const [headMotionSmoothness, setHeadMotionSmoothness] = usePersistedNumber(
     VIBETUBE_SETTING_KEYS.headMotionSmoothness,
-    0.04,
+    DEFAULT_VIBETUBE_RENDER_SETTINGS.head_motion_smoothness,
   );
   const [voiceBounceAmountPx, setVoiceBounceAmountPx] = usePersistedNumber(
     VIBETUBE_SETTING_KEYS.voiceBounceAmountPx,
-    4.0,
+    DEFAULT_VIBETUBE_RENDER_SETTINGS.voice_bounce_amount_px,
   );
   const [voiceBounceSensitivity, setVoiceBounceSensitivity] = usePersistedNumber(
     VIBETUBE_SETTING_KEYS.voiceBounceSensitivity,
-    1.0,
+    DEFAULT_VIBETUBE_RENDER_SETTINGS.voice_bounce_sensitivity,
   );
   const [useBackgroundColor, setUseBackgroundColor] = usePersistedBoolean(
     VIBETUBE_SETTING_KEYS.useBackgroundColor,
-    false,
+    DEFAULT_VIBETUBE_RENDER_SETTINGS.use_background_color,
   );
   const [useBackgroundImage, setUseBackgroundImage] = usePersistedBoolean(
     VIBETUBE_SETTING_KEYS.useBackgroundImage,
-    false,
+    DEFAULT_VIBETUBE_RENDER_SETTINGS.use_background_image,
   );
   const [backgroundColor, setBackgroundColor] = usePersistedString(
     VIBETUBE_SETTING_KEYS.backgroundColor,
-    '#101820',
+    DEFAULT_VIBETUBE_RENDER_SETTINGS.background_color,
   );
   const [subtitleEnabled, setSubtitleEnabled] = usePersistedBoolean(
     VIBETUBE_SETTING_KEYS.subtitleEnabled,
-    false,
+    DEFAULT_VIBETUBE_RENDER_SETTINGS.subtitle_enabled,
   );
   const [subtitleStyle, setSubtitleStyle] = usePersistedString(
     VIBETUBE_SETTING_KEYS.subtitleStyle,
-    'minimal',
+    DEFAULT_VIBETUBE_RENDER_SETTINGS.subtitle_style,
   );
   const [subtitleTextColor, setSubtitleTextColor] = usePersistedString(
     VIBETUBE_SETTING_KEYS.subtitleTextColor,
-    '#FFFFFF',
+    DEFAULT_VIBETUBE_RENDER_SETTINGS.subtitle_text_color,
   );
   const [subtitleOutlineColor, setSubtitleOutlineColor] = usePersistedString(
     VIBETUBE_SETTING_KEYS.subtitleOutlineColor,
-    '#000000',
+    DEFAULT_VIBETUBE_RENDER_SETTINGS.subtitle_outline_color,
   );
   const [subtitleOutlineWidth, setSubtitleOutlineWidth] = usePersistedNumber(
     VIBETUBE_SETTING_KEYS.subtitleOutlineWidth,
-    2,
+    DEFAULT_VIBETUBE_RENDER_SETTINGS.subtitle_outline_width,
   );
   const [subtitleFontFamily, setSubtitleFontFamily] = usePersistedString(
     VIBETUBE_SETTING_KEYS.subtitleFontFamily,
-    'sans',
+    DEFAULT_VIBETUBE_RENDER_SETTINGS.subtitle_font_family,
   );
   const [subtitleBold, setSubtitleBold] = usePersistedBoolean(
     VIBETUBE_SETTING_KEYS.subtitleBold,
-    true,
+    DEFAULT_VIBETUBE_RENDER_SETTINGS.subtitle_bold,
   );
   const [subtitleItalic, setSubtitleItalic] = usePersistedBoolean(
     VIBETUBE_SETTING_KEYS.subtitleItalic,
-    false,
+    DEFAULT_VIBETUBE_RENDER_SETTINGS.subtitle_italic,
   );
   const [storyLayoutStyle, setStoryLayoutStyle] = usePersistedString(
     VIBETUBE_SETTING_KEYS.storyLayoutStyle,
-    'balanced',
+    DEFAULT_VIBETUBE_RENDER_SETTINGS.story_layout_style,
   );
   const [showProfileNames, setShowProfileNames] = usePersistedBoolean(
     VIBETUBE_SETTING_KEYS.showProfileNames,
-    true,
+    DEFAULT_VIBETUBE_RENDER_SETTINGS.show_profile_names,
   );
   const [, setBackgroundImageFile] = useState<File | null>(null);
   const [backgroundImagePreview, setBackgroundImagePreview] = useState<string | null>(null);

@@ -8,10 +8,12 @@ import {
   MoreHorizontal,
   Play,
   PlayCircle,
+  Square,
   Trash2,
 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog,
   DialogContent,
@@ -37,6 +39,7 @@ import {
   useHistory,
   useImportGeneration,
 } from '@/lib/hooks/useHistory';
+import { useProfile } from '@/lib/hooks/useProfiles';
 import { cn } from '@/lib/utils/cn';
 import { formatDate, formatDuration } from '@/lib/utils/format';
 import {
@@ -44,6 +47,7 @@ import {
   getPersistedVibeTubeRenderSettings,
 } from '@/lib/utils/vibetubeSettings';
 import { usePlayerStore } from '@/stores/playerStore';
+import { useUIStore } from '@/stores/uiStore';
 
 // OLD TABLE-BASED COMPONENT - REMOVED (can be found in git history)
 // This is the new alternate history view with fixed height rows
@@ -74,6 +78,8 @@ export function HistoryTable() {
   const [allHistory, setAllHistory] = useState<HistoryResponse[]>([]);
   const [total, setTotal] = useState(0);
   const [isScrolled, setIsScrolled] = useState(false);
+  const [showSelectedProfileOnly, setShowSelectedProfileOnly] = useState(false);
+  const [selectedGenerationIds, setSelectedGenerationIds] = useState<string[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -88,8 +94,13 @@ export function HistoryTable() {
   const [selectedVibeJobId, setSelectedVibeJobId] = useState<string | null>(null);
   const [renderingGenerationIds, setRenderingGenerationIds] = useState<Set<string>>(new Set());
   const [isDeletingVibeRender, setIsDeletingVibeRender] = useState(false);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const limit = 20;
   const { toast } = useToast();
+  const selectedProfileId = useUIStore((state) => state.selectedProfileId);
+  const { data: selectedProfile } = useProfile(selectedProfileId || '');
+  const historyProfileId = showSelectedProfileOnly ? selectedProfileId || undefined : undefined;
+  const historyFilterKey = historyProfileId || '__all__';
 
   const {
     data: historyData,
@@ -97,6 +108,7 @@ export function HistoryTable() {
     isFetching,
   } = useHistory({
     exclude_story_generations: true,
+    profile_id: historyProfileId,
     limit,
     offset: page * limit,
   });
@@ -114,6 +126,19 @@ export function HistoryTable() {
     queryKey: ['vibetube-jobs'],
     queryFn: () => apiClient.listVibeTubeJobs(),
   });
+
+  useEffect(() => {
+    if (showSelectedProfileOnly && !selectedProfileId) {
+      setShowSelectedProfileOnly(false);
+    }
+  }, [showSelectedProfileOnly, selectedProfileId]);
+
+  useEffect(() => {
+    const activeFilter = historyFilterKey;
+    if (!activeFilter) return;
+    setPage(0);
+    setAllHistory([]);
+  }, [historyFilterKey]);
 
   // Update accumulated history when new data arrives
   useEffect(() => {
@@ -297,6 +322,22 @@ export function HistoryTable() {
   const selectedVibeJob =
     linkedJobs.find((job) => job.job_id === selectedVibeJobId) ?? linkedJobs[0] ?? null;
   const primaryVibeExportFormat = getPrimaryVibeExportFormat(selectedVibeJob);
+  const linkedJobsByGenerationId = useMemo(() => {
+    const jobsByGenerationId: Record<string, string[]> = {};
+    for (const job of vibetubeJobsQuery.data ?? []) {
+      if (!job.source_generation_id) continue;
+      if (!jobsByGenerationId[job.source_generation_id]) {
+        jobsByGenerationId[job.source_generation_id] = [];
+      }
+      jobsByGenerationId[job.source_generation_id]?.push(job.job_id);
+    }
+    return jobsByGenerationId;
+  }, [vibetubeJobsQuery.data]);
+
+  useEffect(() => {
+    const validGenerationIds = new Set(allHistory.map((item) => item.id));
+    setSelectedGenerationIds((prev) => prev.filter((id) => validGenerationIds.has(id)));
+  }, [allHistory]);
 
   const handleDeleteVibeRender = async (jobId: string) => {
     const confirmed = await confirm('Delete this linked VibeTube render?');
@@ -405,9 +446,130 @@ export function HistoryTable() {
 
   const history = allHistory;
   const hasMore = allHistory.length < total;
+  const allVisibleGenerationIds = history.map((gen) => gen.id);
+  const allSelected =
+    allVisibleGenerationIds.length > 0 &&
+    selectedGenerationIds.length === allVisibleGenerationIds.length;
+
+  const handleToggleAllGenerations = (checked: boolean) => {
+    setSelectedGenerationIds(checked ? allVisibleGenerationIds : []);
+  };
+
+  const handleToggleGeneration = (generationId: string, checked: boolean) => {
+    setSelectedGenerationIds((prev) =>
+      checked ? [...new Set([...prev, generationId])] : prev.filter((id) => id !== generationId),
+    );
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedGenerationIds.length === 0) return;
+
+    const linkedJobIds = selectedGenerationIds.flatMap(
+      (generationId) => linkedJobsByGenerationId[generationId] ?? [],
+    );
+    const confirmed = await confirm(
+      `Delete ${selectedGenerationIds.length} selected generation${selectedGenerationIds.length === 1 ? '' : 's'}${linkedJobIds.length > 0 ? ` and ${linkedJobIds.length} linked video render${linkedJobIds.length === 1 ? '' : 's'}` : ''}? This action cannot be undone.`,
+    );
+    if (!confirmed) return;
+
+    setIsBulkDeleting(true);
+    try {
+      const renderDeletionResults = await Promise.allSettled(
+        [...new Set(linkedJobIds)].map((jobId) => apiClient.deleteVibeTubeJob(jobId)),
+      );
+      const generationDeletionResults = await Promise.allSettled(
+        selectedGenerationIds.map((generationId) => deleteGeneration.mutateAsync(generationId)),
+      );
+
+      const deletedRenderCount = renderDeletionResults.filter(
+        (result) => result.status === 'fulfilled',
+      ).length;
+      const failedRenderCount = renderDeletionResults.length - deletedRenderCount;
+      const deletedGenerationCount = generationDeletionResults.filter(
+        (result) => result.status === 'fulfilled',
+      ).length;
+      const failedGenerationCount = generationDeletionResults.length - deletedGenerationCount;
+
+      setSelectedGenerationIds([]);
+      setPage(0);
+      setAllHistory([]);
+      await queryClient.invalidateQueries({ queryKey: ['history'] });
+      await queryClient.invalidateQueries({ queryKey: ['vibetube-jobs'] });
+
+      if (deletedGenerationCount > 0 || deletedRenderCount > 0) {
+        const parts: string[] = [];
+        if (deletedGenerationCount > 0) {
+          parts.push(
+            `${deletedGenerationCount} audio generation${deletedGenerationCount === 1 ? '' : 's'}`,
+          );
+        }
+        if (deletedRenderCount > 0) {
+          parts.push(`${deletedRenderCount} video render${deletedRenderCount === 1 ? '' : 's'}`);
+        }
+        toast({
+          title: 'Media deleted',
+          description: `Deleted ${parts.join(' and ')}.`,
+        });
+      }
+
+      if (failedGenerationCount > 0 || failedRenderCount > 0) {
+        toast({
+          title: 'Some deletions failed',
+          description: `${failedGenerationCount} generation${failedGenerationCount === 1 ? '' : 's'} and ${failedRenderCount} render${failedRenderCount === 1 ? '' : 's'} could not be deleted.`,
+          variant: 'destructive',
+        });
+      }
+    } finally {
+      setIsBulkDeleting(false);
+    }
+  };
 
   return (
     <div className="flex flex-col h-full min-h-0 relative">
+      <div className="shrink-0 flex items-center justify-between gap-3 pb-3">
+        <div className="min-w-0">
+          <div className="text-sm font-medium">Generations</div>
+          <div className="text-xs text-muted-foreground">
+            {showSelectedProfileOnly && selectedProfile
+              ? `Showing ${selectedProfile.name}`
+              : 'Showing all characters'}
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {selectedGenerationIds.length > 0 && (
+            <>
+              <Button variant="outline" size="sm" onClick={() => setSelectedGenerationIds([])}>
+                <Square className="mr-2 h-4 w-4" />
+                Clear ({selectedGenerationIds.length})
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={handleBulkDelete}
+                disabled={isBulkDeleting}
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                {isBulkDeleting
+                  ? 'Deleting...'
+                  : `Delete Selected (${selectedGenerationIds.length})`}
+              </Button>
+            </>
+          )}
+          <div
+            className={cn(
+              'flex items-center gap-2 rounded-full border bg-card/70 px-3 py-1.5 text-xs',
+              !selectedProfileId && 'opacity-60',
+            )}
+          >
+            <Checkbox
+              checked={showSelectedProfileOnly}
+              onCheckedChange={setShowSelectedProfileOnly}
+              disabled={!selectedProfileId}
+            />
+            <span>Selected only</span>
+          </div>
+        </div>
+      </div>
       {history.length === 0 ? (
         <div className="text-center py-12 px-5 border-2 border-dashed mb-5 border-muted rounded-md text-muted-foreground flex-1 flex items-center justify-center">
           No voice generations, yet...
@@ -427,14 +589,25 @@ export function HistoryTable() {
             {history.map((gen) => {
               const isCurrentlyPlaying = currentAudioId === gen.id && isPlaying;
               const isRenderingVideo = renderingGenerationIds.has(gen.id);
+              const isSelected = selectedGenerationIds.includes(gen.id);
+              const latestLinkedJob = getLatestLinkedJob(gen);
+              const hasLinkedVideo = !!latestLinkedJob;
               return (
                 <div
                   key={gen.id}
                   className={cn(
                     'flex items-start gap-4 min-h-[126px] border rounded-md p-3 bg-card hover:bg-muted/70 transition-colors text-left w-full',
                     isCurrentlyPlaying && 'bg-muted/70',
+                    isSelected && 'ring-2 ring-primary/70',
                   )}
                 >
+                  <div className="shrink-0 pt-1">
+                    <Checkbox
+                      checked={isSelected}
+                      onCheckedChange={(checked) => handleToggleGeneration(gen.id, checked)}
+                    />
+                  </div>
+
                   {/* Waveform icon */}
                   <div className="flex items-center shrink-0">
                     <AudioWaveform className="h-5 w-5 text-muted-foreground" />
@@ -481,20 +654,27 @@ export function HistoryTable() {
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => handlePlayLatestVideo(gen)}
+                        onClick={() =>
+                          hasLinkedVideo ? handlePlayLatestVideo(gen) : handleRenderVibeTube(gen)
+                        }
+                        disabled={isRenderingVideo}
                       >
-                        <PlayCircle className="mr-1.5 h-3.5 w-3.5" />
-                        Play Video
+                        {hasLinkedVideo ? (
+                          <PlayCircle className="mr-1.5 h-3.5 w-3.5" />
+                        ) : (
+                          <Clapperboard className="mr-1.5 h-3.5 w-3.5" />
+                        )}
+                        {isRenderingVideo
+                          ? 'Rendering...'
+                          : hasLinkedVideo
+                            ? 'Play Video'
+                            : 'Render Video'}
                       </Button>
                     </div>
                   </div>
 
                   {/* Far right - Ellipsis actions */}
-                  <div
-                    className="w-10 shrink-0 flex justify-end"
-                    onMouseDown={(e) => e.stopPropagation()}
-                    onClick={(e) => e.stopPropagation()}
-                  >
+                  <div className="w-10 shrink-0 flex justify-end">
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <Button
@@ -545,6 +725,32 @@ export function HistoryTable() {
                 </div>
               );
             })}
+
+            {history.length > 0 && (
+              <div className="sticky bottom-0 z-10 -mx-0 rounded-md border bg-background/95 p-3 backdrop-blur">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 text-sm">
+                    <Checkbox checked={allSelected} onCheckedChange={handleToggleAllGenerations} />
+                    <span className="text-muted-foreground">
+                      {selectedGenerationIds.length > 0
+                        ? `${selectedGenerationIds.length} selected`
+                        : 'Select all visible'}
+                    </span>
+                  </div>
+                  {selectedGenerationIds.length > 0 && (
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      onClick={handleBulkDelete}
+                      disabled={isBulkDeleting}
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" />
+                      {isBulkDeleting ? 'Deleting...' : 'Delete Selected'}
+                    </Button>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Load more trigger element */}
             {hasMore && (
@@ -643,7 +849,11 @@ export function HistoryTable() {
                   onClick={() => handleRenderVibeTube(selectedGeneration)}
                   disabled={renderingGenerationIds.has(selectedGeneration.id)}
                 >
-                  <Clapperboard className="mr-2 h-4 w-4" />
+                  {renderingGenerationIds.has(selectedGeneration.id) ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Clapperboard className="mr-2 h-4 w-4" />
+                  )}
                   {renderingGenerationIds.has(selectedGeneration.id)
                     ? 'Rendering...'
                     : 'Render New'}
@@ -700,7 +910,9 @@ export function HistoryTable() {
                 preload="metadata"
                 key={selectedVibeJob.job_id}
                 src={apiClient.getVibeTubePreviewUrl(selectedVibeJob.job_id)}
-              />
+              >
+                <track kind="captions" />
+              </video>
             ) : (
               <div className="text-sm text-muted-foreground">
                 No linked render found for this generation yet.
@@ -719,7 +931,7 @@ export function HistoryTable() {
                     )}
                     onClick={() => setSelectedVibeJobId(job.job_id)}
                   >
-                    <div className="font-medium">{job.job_id.slice(0, 8)}</div>
+                    <div className="font-medium">{new Date(job.created_at).toLocaleString()}</div>
                     <div className="text-xs text-muted-foreground">
                       {formatDate(job.created_at)} |{' '}
                       {job.duration_sec != null ? formatDuration(job.duration_sec) : '--'}

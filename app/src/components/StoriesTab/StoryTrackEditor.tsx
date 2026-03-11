@@ -115,12 +115,31 @@ const TIME_RULER_HEIGHT = 24; // h-6 = 1.5rem = 24px
 const MIN_PIXELS_PER_SECOND = 10;
 const MAX_PIXELS_PER_SECOND = 200;
 const DEFAULT_PIXELS_PER_SECOND = 50;
-const DEFAULT_TRACKS = [1, 0, -1]; // Default 3 tracks
 const MIN_EDITOR_HEIGHT = 120;
 const MAX_EDITOR_HEIGHT = 500;
 
+function buildDefaultTracks(trackCount: number): number[] {
+  if (trackCount <= 1) {
+    return [0];
+  }
+
+  const tracks = [0];
+  let distance = 1;
+
+  while (tracks.length < trackCount) {
+    tracks.push(distance);
+    if (tracks.length < trackCount) {
+      tracks.push(-distance);
+    }
+    distance += 1;
+  }
+
+  return tracks;
+}
+
 export function StoryTrackEditor({ storyId, items }: StoryTrackEditorProps) {
   const [pixelsPerSecond, setPixelsPerSecond] = useState(DEFAULT_PIXELS_PER_SECOND);
+  const [defaultTrackCount, setDefaultTrackCount] = useState(1);
   const [draggingItem, setDraggingItem] = useState<string | null>(null);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [dragPosition, setDragPosition] = useState({ x: 0, y: 0 });
@@ -188,23 +207,26 @@ export function StoryTrackEditor({ storyId, items }: StoryTrackEditorProps) {
     return [...items].sort((a, b) => a.start_time_ms - b.start_time_ms);
   }, [items]);
 
-  const handlePlayPause = () => {
+  const handlePlayPause = useCallback(() => {
     if (isCurrentlyPlaying) {
       pause();
     } else {
       play(storyId, sortedItems);
     }
-  };
+  }, [isCurrentlyPlaying, pause, play, storyId, sortedItems]);
 
   const handleStop = () => {
     stop();
   };
 
-  // Calculate unique tracks from items, always showing at least 3 default tracks
+  // Calculate visible tracks from existing clips plus the user-selected default lane count.
   const tracks = useMemo(() => {
-    const trackSet = new Set([...DEFAULT_TRACKS, ...items.map((item) => item.track)]);
+    const trackSet = new Set([
+      ...buildDefaultTracks(defaultTrackCount),
+      ...items.map((item) => item.track),
+    ]);
     return Array.from(trackSet).sort((a, b) => b - a); // Higher tracks on top
-  }, [items]);
+  }, [defaultTrackCount, items]);
 
   // Track container width for full-width minimum
   useEffect(() => {
@@ -225,9 +247,11 @@ export function StoryTrackEditor({ storyId, items }: StoryTrackEditorProps) {
   }, []);
 
   // Calculate effective duration (accounting for trims)
-  const getEffectiveDuration = (item: StoryItemDetail) => {
-    return item.duration * 1000 - (item.trim_start_ms || 0) - (item.trim_end_ms || 0);
-  };
+  const getEffectiveDuration = useCallback(
+    (item: StoryItemDetail) =>
+      item.duration * 1000 - (item.trim_start_ms || 0) - (item.trim_end_ms || 0),
+    [],
+  );
 
   // Calculate total duration (using effective durations)
   const totalDurationMs = useMemo(() => {
@@ -323,10 +347,34 @@ export function StoryTrackEditor({ storyId, items }: StoryTrackEditorProps) {
     setSelectedClipId(null);
   };
 
+  const handleTimelineWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
+    const container = tracksRef.current;
+    if (!container) return;
+
+    const canScrollHorizontally = container.scrollWidth > container.clientWidth;
+    if (!canScrollHorizontally) return;
+
+    const horizontalDelta =
+      Math.abs(e.deltaX) > 0 ? e.deltaX : Math.abs(e.deltaY) > 0 ? e.deltaY : 0;
+
+    if (horizontalDelta === 0) return;
+
+    e.preventDefault();
+    container.scrollLeft += horizontalDelta;
+  }, []);
+
   const handleClipClick = (e: React.MouseEvent, item: StoryItemDetail) => {
     e.stopPropagation();
     if (draggingItem || trimmingItem) return;
     setSelectedClipId(item.id);
+    if (tracksRef.current) {
+      const clipCenter = item.start_time_ms + getEffectiveDuration(item) / 2;
+      const targetScrollLeft = Math.max(
+        0,
+        msToPixels(clipCenter) - tracksRef.current.clientWidth / 2,
+      );
+      tracksRef.current.scrollTo({ left: targetScrollLeft, behavior: 'smooth' });
+    }
   };
 
   const handleTrimStart = (e: React.MouseEvent, item: StoryItemDetail, side: 'start' | 'end') => {
@@ -788,6 +836,29 @@ export function StoryTrackEditor({ storyId, items }: StoryTrackEditorProps) {
 
           {/* Zoom controls - right side */}
           <div className="flex items-center gap-2">
+            <span className="text-xs text-muted-foreground">Channels:</span>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={() => setDefaultTrackCount((prev) => Math.max(1, prev - 1))}
+              disabled={defaultTrackCount <= 1}
+              title="Remove empty default channel"
+            >
+              <Minus className="h-3 w-3" />
+            </Button>
+            <span className="text-xs text-muted-foreground tabular-nums w-4 text-center">
+              {defaultTrackCount}
+            </span>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={() => setDefaultTrackCount((prev) => prev + 1)}
+              title="Add channel"
+            >
+              <Plus className="h-3 w-3" />
+            </Button>
             <span className="text-xs text-muted-foreground">Zoom:</span>
             <Button variant="ghost" size="icon" className="h-6 w-6" onClick={handleZoomOut}>
               <Minus className="h-3 w-3" />
@@ -827,7 +898,8 @@ export function StoryTrackEditor({ storyId, items }: StoryTrackEditorProps) {
           {/* biome-ignore lint/a11y/noStaticElementInteractions: Container handles drag events for child clips */}
           <div
             ref={tracksRef}
-            className="overflow-auto relative flex-1"
+            className="story-timeline-scrollbar overflow-auto relative flex-1"
+            onWheel={handleTimelineWheel}
             onMouseMove={draggingItem ? handleDragMove : undefined}
             onMouseUp={draggingItem ? handleDragEnd : undefined}
             onMouseLeave={draggingItem ? handleDragEnd : undefined}

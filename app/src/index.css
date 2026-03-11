@@ -125,6 +125,31 @@
     text-orientation: mixed;
     letter-spacing: 0.1em;
   }
+
+  .story-timeline-scrollbar {
+    scrollbar-width: auto;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.55) hsl(var(--muted) / 0.2);
+  }
+
+  .story-timeline-scrollbar::-webkit-scrollbar {
+    display: block;
+    height: 12px;
+    width: 12px;
+  }
+
+  .story-timeline-scrollbar::-webkit-scrollbar-track {
+    background: hsl(var(--muted) / 0.2);
+  }
+
+  .story-timeline-scrollbar::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.55);
+    border-radius: 9999px;
+    border: 2px solid hsl(var(--background));
+  }
+
+  .story-timeline-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--accent) / 0.75);
+  }
 }
 
 @keyframes fadeInScale {

@@ -1,7 +1,8 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Edit, MoreHorizontal, Plus, Trash2, Mic } from 'lucide-react';
-import { useMemo, useRef } from 'react';
+import { Edit, Mic, MoreHorizontal, Plus, Trash2 } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,6 +18,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { useToast } from '@/components/ui/use-toast';
 import { ProfileForm } from '@/components/VoiceProfiles/ProfileForm';
 import { apiClient } from '@/lib/api/client';
 import type { VibeTubeAvatarPackResponse, VoiceProfileResponse } from '@/lib/api/types';
@@ -34,10 +36,15 @@ export function VoicesTab() {
   const queryClient = useQueryClient();
   const setDialogOpen = useUIStore((state) => state.setProfileDialogOpen);
   const setEditingProfileId = useUIStore((state) => state.setEditingProfileId);
+  const setSelectedProfileId = useUIStore((state) => state.setSelectedProfileId);
+  const selectedProfileId = useUIStore((state) => state.selectedProfileId);
   const deleteProfile = useDeleteProfile();
   const scrollRef = useRef<HTMLDivElement>(null);
   const audioUrl = usePlayerStore((state) => state.audioUrl);
   const isPlayerVisible = !!audioUrl;
+  const [selectedProfileIds, setSelectedProfileIds] = useState<string[]>([]);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+  const { toast } = useToast();
 
   // Get generation counts per profile
   const generationCounts = useMemo(() => {
@@ -96,6 +103,12 @@ export function VoicesTab() {
     enabled: !!profiles?.length,
   });
 
+  useEffect(() => {
+    if (!profiles) return;
+    const validProfileIds = new Set(profiles.map((profile) => profile.id));
+    setSelectedProfileIds((prev) => prev.filter((id) => validProfileIds.has(id)));
+  }, [profiles]);
+
   const handleEdit = (profileId: string) => {
     setEditingProfileId(profileId);
     setDialogOpen(true);
@@ -116,6 +129,68 @@ export function VoicesTab() {
     }
   };
 
+  const allVisibleProfileIds = profiles?.map((profile) => profile.id) || [];
+  const allSelected =
+    allVisibleProfileIds.length > 0 && selectedProfileIds.length === allVisibleProfileIds.length;
+
+  const handleToggleAllProfiles = (checked: boolean) => {
+    setSelectedProfileIds(checked ? allVisibleProfileIds : []);
+  };
+
+  const handleToggleProfileSelection = (profileId: string, checked: boolean) => {
+    setSelectedProfileIds((prev) =>
+      checked ? [...new Set([...prev, profileId])] : prev.filter((id) => id !== profileId),
+    );
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedProfileIds.length === 0) return;
+    const confirmed = await confirm(
+      `Delete ${selectedProfileIds.length} selected character${selectedProfileIds.length === 1 ? '' : 's'}? This action cannot be undone.`,
+    );
+    if (!confirmed) return;
+
+    setIsBulkDeleting(true);
+    try {
+      const results = await Promise.allSettled(
+        selectedProfileIds.map((profileId) => deleteProfile.mutateAsync(profileId)),
+      );
+      const deletedCount = results.filter((result) => result.status === 'fulfilled').length;
+      const failedCount = results.length - deletedCount;
+
+      if (selectedProfileId && selectedProfileIds.includes(selectedProfileId)) {
+        setSelectedProfileId(null);
+      }
+
+      setSelectedProfileIds([]);
+
+      if (failedCount > 0) {
+        console.error('Some profile deletions failed', results);
+      }
+
+      await queryClient.invalidateQueries({ queryKey: ['profiles'] });
+      await queryClient.invalidateQueries({ queryKey: ['history'] });
+      await queryClient.invalidateQueries({ queryKey: ['profile-channels'] });
+
+      if (deletedCount > 0) {
+        toast({
+          title: 'Characters deleted',
+          description: `Deleted ${deletedCount} character${deletedCount === 1 ? '' : 's'}.`,
+        });
+      }
+
+      if (failedCount > 0) {
+        toast({
+          title: 'Some deletions failed',
+          description: `${failedCount} character${failedCount === 1 ? '' : 's'} could not be deleted.`,
+          variant: 'destructive',
+        });
+      }
+    } finally {
+      setIsBulkDeleting(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -132,11 +207,26 @@ export function VoicesTab() {
       {/* Fixed Header */}
       <div className="absolute top-0 left-0 right-0 z-20">
         <div className="flex items-center justify-between mb-6">
-          <h1 className="text-2xl font-bold">Characters</h1>
-          <Button onClick={() => setDialogOpen(true)}>
-            <Plus className="h-4 w-4 mr-2" />
-            New Character
-          </Button>
+          <div>
+            <h1 className="text-2xl font-bold">Characters</h1>
+            {selectedProfileIds.length > 0 && (
+              <div className="text-sm text-muted-foreground">
+                {selectedProfileIds.length} selected
+              </div>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {selectedProfileIds.length > 0 && (
+              <Button variant="destructive" onClick={handleBulkDelete} disabled={isBulkDeleting}>
+                <Trash2 className="h-4 w-4 mr-2" />
+                {isBulkDeleting ? 'Deleting...' : `Delete Selected (${selectedProfileIds.length})`}
+              </Button>
+            )}
+            <Button onClick={() => setDialogOpen(true)}>
+              <Plus className="h-4 w-4 mr-2" />
+              New Character
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -151,6 +241,9 @@ export function VoicesTab() {
         <Table>
           <TableHeader>
             <TableRow>
+              <TableHead className="w-[52px]">
+                <Checkbox checked={allSelected} onCheckedChange={handleToggleAllProfiles} />
+              </TableHead>
               <TableHead>Name</TableHead>
               <TableHead>Avatar States</TableHead>
               <TableHead>Language</TableHead>
@@ -165,10 +258,12 @@ export function VoicesTab() {
               <VoiceRow
                 key={profile.id}
                 profile={profile}
+                selected={selectedProfileIds.includes(profile.id)}
                 avatarPack={avatarPacks?.[profile.id] ?? null}
                 generationCount={generationCounts[profile.id] || 0}
                 channelIds={channelAssignments?.[profile.id] || []}
                 channels={channels || []}
+                onSelect={(checked) => handleToggleProfileSelection(profile.id, checked)}
                 onChannelChange={(channelIds) => handleChannelChange(profile.id, channelIds)}
                 onEdit={() => handleEdit(profile.id)}
                 onDelete={() => handleProfileDelete(profile.id)}
@@ -185,10 +280,12 @@ export function VoicesTab() {
 
 interface VoiceRowProps {
   profile: VoiceProfileResponse;
+  selected: boolean;
   avatarPack: VibeTubeAvatarPackResponse | null;
   generationCount: number;
   channelIds: string[];
   channels: Array<{ id: string; name: string; is_default: boolean }>;
+  onSelect: (checked: boolean) => void;
   onChannelChange: (channelIds: string[]) => void;
   onEdit: () => void;
   onDelete: () => void;
@@ -196,10 +293,12 @@ interface VoiceRowProps {
 
 function VoiceRow({
   profile,
+  selected,
   avatarPack,
   generationCount,
   channelIds,
   channels,
+  onSelect,
   onChannelChange,
   onEdit,
   onDelete,
@@ -208,23 +307,38 @@ function VoiceRow({
   const serverUrl = useServerStore((state) => state.serverUrl);
   const avatarUrl = profile.avatar_path ? `${serverUrl}/profiles/${profile.id}/avatar` : null;
   const stateThumbs = [
-    { key: 'idle', label: 'Idle', url: avatarPack?.idle_url ? apiClient.getVibeTubeAvatarStateUrl(profile.id, 'idle') : null },
-    { key: 'talk', label: 'Talk', url: avatarPack?.talk_url ? apiClient.getVibeTubeAvatarStateUrl(profile.id, 'talk') : null },
+    {
+      key: 'idle',
+      label: 'Idle',
+      url: avatarPack?.idle_url ? apiClient.getVibeTubeAvatarStateUrl(profile.id, 'idle') : null,
+    },
+    {
+      key: 'talk',
+      label: 'Talk',
+      url: avatarPack?.talk_url ? apiClient.getVibeTubeAvatarStateUrl(profile.id, 'talk') : null,
+    },
     {
       key: 'idle_blink',
       label: 'Idle Blink',
-      url: avatarPack?.idle_blink_url ? apiClient.getVibeTubeAvatarStateUrl(profile.id, 'idle_blink') : null,
+      url: avatarPack?.idle_blink_url
+        ? apiClient.getVibeTubeAvatarStateUrl(profile.id, 'idle_blink')
+        : null,
     },
     {
       key: 'talk_blink',
       label: 'Talk Blink',
-      url: avatarPack?.talk_blink_url ? apiClient.getVibeTubeAvatarStateUrl(profile.id, 'talk_blink') : null,
+      url: avatarPack?.talk_blink_url
+        ? apiClient.getVibeTubeAvatarStateUrl(profile.id, 'talk_blink')
+        : null,
     },
   ].filter((item) => item.url);
   const versionTag = encodeURIComponent(profile.updated_at);
 
   return (
     <TableRow className="cursor-pointer" onClick={onEdit}>
+      <TableCell onClick={(e) => e.stopPropagation()}>
+        <Checkbox checked={selected} onCheckedChange={onSelect} />
+      </TableCell>
       <TableCell>
         <div className="flex items-center gap-3">
           <div className="h-10 w-10 rounded-lg bg-muted flex items-center justify-center shrink-0 overflow-hidden border">
