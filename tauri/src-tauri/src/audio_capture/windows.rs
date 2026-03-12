@@ -2,8 +2,8 @@ use crate::audio_capture::AudioCaptureState;
 use base64::{engine::general_purpose, Engine as _};
 use hound::{WavSpec, WavWriter};
 use std::io::Cursor;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 use wasapi::*;
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
@@ -103,11 +103,13 @@ pub async fn start_capture(
         // For loopback mode: get Render device, initialize with Capture direction
         // This triggers AUDCLNT_STREAMFLAGS_LOOPBACK in the wasapi crate
         let stream_mode = StreamMode::EventsShared {
-            autoconvert: true,  // Enable automatic format conversion
+            autoconvert: true,               // Enable automatic format conversion
             buffer_duration_hns: min_period, // Use minimum period
         };
 
-        if let Err(e) = audio_client.initialize_client(&mix_format, &Direction::Capture, &stream_mode) {
+        if let Err(e) =
+            audio_client.initialize_client(&mix_format, &Direction::Capture, &stream_mode)
+        {
             let error_msg = format!("Failed to initialize audio client: {}", e);
             eprintln!("{}", error_msg);
             *error_arc.lock().unwrap() = Some(error_msg);
@@ -241,10 +243,10 @@ pub async fn stop_capture(state: &AudioCaptureState) -> Result<String, String> {
 
     // Convert to WAV
     let wav_data = samples_to_wav(&samples, sample_rate, channels)?;
-    
+
     // Encode to base64
     let base64_data = general_purpose::STANDARD.encode(&wav_data);
-    
+
     Ok(base64_data)
 }
 
@@ -262,7 +264,7 @@ pub fn is_supported() -> bool {
 fn samples_to_wav(samples: &[f32], sample_rate: u32, channels: u16) -> Result<Vec<u8>, String> {
     let mut buffer = Vec::new();
     let cursor = Cursor::new(&mut buffer);
-    
+
     let spec = WavSpec {
         channels,
         sample_rate,
@@ -270,18 +272,20 @@ fn samples_to_wav(samples: &[f32], sample_rate: u32, channels: u16) -> Result<Ve
         sample_format: hound::SampleFormat::Int,
     };
 
-    let mut writer = WavWriter::new(cursor, spec)
-        .map_err(|e| format!("Failed to create WAV writer: {}", e))?;
+    let mut writer =
+        WavWriter::new(cursor, spec).map_err(|e| format!("Failed to create WAV writer: {}", e))?;
 
     // Convert f32 samples to i16
     for sample in samples {
         let clamped = sample.clamp(-1.0, 1.0);
         let i16_sample = (clamped * 32767.0) as i16;
-        writer.write_sample(i16_sample)
+        writer
+            .write_sample(i16_sample)
             .map_err(|e| format!("Failed to write sample: {}", e))?;
     }
 
-    writer.finalize()
+    writer
+        .finalize()
         .map_err(|e| format!("Failed to finalize WAV: {}", e))?;
 
     Ok(buffer)

@@ -1,10 +1,14 @@
 import { create } from 'zustand';
+import type { LanguageCode, TranscriptionLanguageCode } from '@/lib/constants/languages';
+import type { RecordingPromptMode } from '@/lib/constants/voiceSampleScripts';
 
 // Draft state for the create voice profile form
 export interface ProfileFormDraft {
   name: string;
   description: string;
-  language: string;
+  language: LanguageCode;
+  transcriptionLanguage: TranscriptionLanguageCode;
+  recordingPromptMode: RecordingPromptMode;
   referenceText: string;
   sampleMode: 'upload' | 'record' | 'system';
   // Note: File objects can't be persisted, so we store metadata

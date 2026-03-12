@@ -4,8 +4,8 @@ import { Visualizer } from 'react-sound-visualizer';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { FormControl, FormItem, FormMessage } from '@/components/ui/form';
-import { formatAudioDuration } from '@/lib/utils/audio';
 import type { AudioProcessingOptions } from '@/lib/hooks/useAudioRecording';
+import { formatAudioDuration } from '@/lib/utils/audio';
 
 const MemoizedWaveform = memo(function MemoizedWaveform({
   audioStream,
@@ -16,12 +16,7 @@ const MemoizedWaveform = memo(function MemoizedWaveform({
     <div className="absolute inset-0 pointer-events-none flex items-center justify-center opacity-30">
       <Visualizer audio={audioStream} autoStart strokeColor="#b39a3d">
         {({ canvasRef }) => (
-          <canvas
-            ref={canvasRef}
-            width={500}
-            height={150}
-            className="w-full h-full"
-          />
+          <canvas ref={canvasRef} width={500} height={150} className="w-full h-full" />
         )}
       </Visualizer>
     </div>
@@ -39,6 +34,7 @@ interface AudioSampleRecordingProps {
   onPlayPause: () => void;
   isPlaying: boolean;
   isTranscribing?: boolean;
+  showTranscribeButton?: boolean;
   showWaveform?: boolean;
   audioProcessing: AudioProcessingOptions;
   onAudioProcessingChange: (next: AudioProcessingOptions) => void;
@@ -55,6 +51,7 @@ export function AudioSampleRecording({
   onPlayPause,
   isPlaying,
   isTranscribing = false,
+  showTranscribeButton = true,
   showWaveform = true,
   audioProcessing,
   onAudioProcessingChange,
@@ -93,9 +90,7 @@ export function AudioSampleRecording({
         <div className="space-y-4">
           {!isRecording && !file && (
             <div className="relative flex flex-col items-center justify-center gap-4 p-4 border-2 border-dashed rounded-lg min-h-[180px] overflow-hidden">
-              {showWaveform && audioStream && (
-                <MemoizedWaveform audioStream={audioStream} />
-              )}
+              {showWaveform && audioStream && <MemoizedWaveform audioStream={audioStream} />}
               <Button
                 type="button"
                 onClick={onStart}
@@ -160,9 +155,7 @@ export function AudioSampleRecording({
 
           {isRecording && (
             <div className="relative flex flex-col items-center justify-center gap-4 p-4 border-2 border-accent rounded-lg bg-accent/5 min-h-[180px] overflow-hidden">
-              {showWaveform && audioStream && (
-                <MemoizedWaveform audioStream={audioStream} />
-              )}
+              {showWaveform && audioStream && <MemoizedWaveform audioStream={audioStream} />}
               <div className="relative z-10 flex items-center gap-4">
                 <div className="flex items-center gap-2">
                   <div className="h-3 w-3 rounded-full bg-accent animate-pulse" />
@@ -196,16 +189,18 @@ export function AudioSampleRecording({
                 <Button type="button" size="icon" variant="outline" onClick={onPlayPause}>
                   {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
                 </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={onTranscribe}
-                  disabled={isTranscribing}
-                  className="flex items-center gap-2"
-                >
-                  <Mic className="h-4 w-4" />
-                  {isTranscribing ? 'Transcribing...' : 'Transcribe'}
-                </Button>
+                {showTranscribeButton && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={onTranscribe}
+                    disabled={isTranscribing}
+                    className="flex items-center gap-2"
+                  >
+                    <Mic className="h-4 w-4" />
+                    {isTranscribing ? 'Transcribing...' : 'Transcribe'}
+                  </Button>
+                )}
                 <Button
                   type="button"
                   variant="outline"

@@ -17,7 +17,7 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
 import { apiClient } from '@/lib/api/client';
-import { LANGUAGE_OPTIONS } from '@/lib/constants/languages';
+import { SUPPORTED_LANGUAGES } from '@/lib/constants/languages';
 import { useGenerationForm } from '@/lib/hooks/useGenerationForm';
 import { useProfile, useProfiles } from '@/lib/hooks/useProfiles';
 import { useAddStoryItem, useStory } from '@/lib/hooks/useStories';
@@ -31,12 +31,15 @@ import { useUIStore } from '@/stores/uiStore';
 
 interface FloatingGenerateBoxProps {
   isPlayerOpen?: boolean;
-  showVoiceSelector?: boolean;
+  desktopMetrics?: {
+    left: number;
+    width: number;
+  } | null;
 }
 
 export function FloatingGenerateBox({
   isPlayerOpen = false,
-  showVoiceSelector = false,
+  desktopMetrics = null,
 }: FloatingGenerateBoxProps) {
   const autoVideoCheckboxId = 'floating-generate-auto-video';
   const queryClient = useQueryClient();
@@ -187,6 +190,16 @@ export function FloatingGenerateBox({
     }
   }, [selectedProfileId, profiles, setSelectedProfileId]);
 
+  useEffect(() => {
+    if (!selectedProfile?.language) {
+      return;
+    }
+    form.setValue('language', selectedProfile.language, {
+      shouldDirty: true,
+      shouldValidate: true,
+    });
+  }, [form, selectedProfile?.id, selectedProfile?.language]);
+
   // Auto-resize textarea based on content (only when expanded)
   useEffect(() => {
     if (!isExpanded) {
@@ -249,9 +262,17 @@ export function FloatingGenerateBox({
         isStoriesRoute
           ? // Position aligned with story list: after sidebar + padding, width 360px
             'left-[calc(5rem+2rem)] w-[360px]'
-          : 'left-[calc(5rem+2rem)] w-[calc((100%-5rem-4rem)/2-1rem)]',
+          : !desktopMetrics
+            ? 'left-[calc(5rem+2rem)] right-8 w-auto'
+            : '',
       )}
       style={{
+        ...(desktopMetrics && !isStoriesRoute
+          ? {
+              left: `${desktopMetrics.left}px`,
+              width: `${desktopMetrics.width}px`,
+            }
+          : {}),
         // On stories route: offset by track editor height when visible
         // On other routes: offset by audio player height when visible
         bottom: hasTrackEditor
@@ -435,70 +456,62 @@ export function FloatingGenerateBox({
               >
                 <div className="flex items-center gap-2">
                   {!isStoriesRoute && (
-                    <label
-                      htmlFor={autoVideoCheckboxId}
-                      className="flex items-center gap-2 px-2 py-1 rounded-full border border-border bg-card/70 text-xs whitespace-nowrap"
-                    >
+                    <div className="flex shrink-0 items-center gap-2 px-2 py-1 rounded-full border border-border bg-card/70 text-xs whitespace-nowrap">
                       <Checkbox
                         id={autoVideoCheckboxId}
                         checked={isAutoRenderEnabled}
-                        onCheckedChange={setIsAutoRenderEnabled}
+                        onCheckedChange={(checked) => setIsAutoRenderEnabled(checked === true)}
                         disabled={isPending || isAutoRenderingVideo}
                       />
                       <Clapperboard className="h-3.5 w-3.5 text-muted-foreground" />
-                      <span>Auto Video</span>
-                    </label>
-                  )}
-                  {showVoiceSelector && (
-                    <div className="flex-1">
-                      <Select
-                        value={selectedProfileId || ''}
-                        onValueChange={(value) => setSelectedProfileId(value || null)}
-                      >
-                        <SelectTrigger className="h-8 text-xs bg-card border-border rounded-full hover:bg-background/50 transition-all w-full">
-                          <SelectValue placeholder="Select a voice..." />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {profiles?.map((profile) => (
-                            <SelectItem key={profile.id} value={profile.id} className="text-xs">
-                              {profile.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <label htmlFor={autoVideoCheckboxId} className="cursor-pointer">
+                        Auto Video
+                      </label>
                     </div>
                   )}
 
-                  <FormField
-                    control={form.control}
-                    name="language"
-                    render={({ field }) => (
-                      <FormItem className="flex-1 space-y-0">
-                        <Select onValueChange={field.onChange} defaultValue={field.value}>
-                          <FormControl>
-                            <SelectTrigger className="h-8 text-xs bg-card border-border rounded-full hover:bg-background/50 transition-all">
-                              <SelectValue />
-                            </SelectTrigger>
-                          </FormControl>
-                          <SelectContent>
-                            {LANGUAGE_OPTIONS.map((lang) => (
-                              <SelectItem key={lang.value} value={lang.value} className="text-xs">
-                                {lang.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <FormMessage className="text-xs" />
-                      </FormItem>
-                    )}
-                  />
+                  <div className="min-w-[170px] flex-[1.3]">
+                    <Select
+                      value={selectedProfileId || ''}
+                      onValueChange={(value) => setSelectedProfileId(value || null)}
+                    >
+                      <SelectTrigger className="h-8 w-full rounded-full border-border bg-card text-left text-xs hover:bg-background/50 transition-all">
+                        <SelectValue placeholder="Select a voice...">
+                          {selectedProfile ? (
+                            <div className="flex min-w-0 items-center gap-2 pr-4">
+                              <span className="truncate font-medium text-foreground">
+                                {selectedProfile.name}
+                              </span>
+                              <span className="shrink-0 rounded-full border border-accent/25 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                                {SUPPORTED_LANGUAGES[selectedProfile.language]}
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="text-muted-foreground">Select a voice...</span>
+                          )}
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        {profiles?.map((profile) => (
+                          <SelectItem key={profile.id} value={profile.id} className="text-xs">
+                            <div className="flex min-w-0 items-center justify-between gap-3">
+                              <span className="truncate">{profile.name}</span>
+                              <span className="shrink-0 text-[10px] text-muted-foreground">
+                                {SUPPORTED_LANGUAGES[profile.language]}
+                              </span>
+                            </div>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
 
                   <FormField
                     control={form.control}
                     name="modelSize"
                     render={({ field }) => (
                       <FormItem className="flex-1 space-y-0">
-                        <Select onValueChange={field.onChange} defaultValue={field.value}>
+                        <Select value={field.value} onValueChange={field.onChange}>
                           <FormControl>
                             <SelectTrigger className="h-8 text-xs bg-card border-border rounded-full hover:bg-background/50 transition-all">
                               <SelectValue />

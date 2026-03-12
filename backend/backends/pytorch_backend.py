@@ -337,7 +337,7 @@ class PyTorchTTSBackend:
         Args:
             text: Text to synthesize
             voice_prompt: Voice prompt dictionary from create_voice_prompt
-            language: Language code (en or zh)
+            language: Language code supported by the app (en, zh, ja, ko, de, fr, ru, pt, es, it)
             seed: Random seed for reproducibility
             instruct: Natural language instruction for speech delivery control
 
@@ -563,7 +563,7 @@ class PyTorchSTTBackend:
         
         Args:
             audio_path: Path to audio file
-            language: Optional language hint (en or zh)
+            language: Optional language hint such as en, ko, or ja
             
         Returns:
             Transcribed text

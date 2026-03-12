@@ -1,7 +1,7 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, Host, SampleFormat, StreamConfig};
-use std::sync::{Arc, Mutex};
+use cpal::{Device, Host, SampleFormat, Stream, StreamConfig};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AudioOutputDevice {
@@ -13,19 +13,37 @@ pub struct AudioOutputDevice {
 pub struct AudioOutputState {
     host: Host,
     stop_flag: Arc<AtomicBool>,
+    active_streams: Arc<Mutex<Vec<ActiveStream>>>,
 }
+
+struct ActiveStream {
+    _stream: Stream,
+}
+
+// CPAL stream handles are marked !Send/!Sync across platforms. In this app we only retain
+// opaque handles to keep playback alive and drop them during explicit teardown.
+unsafe impl Send for ActiveStream {}
+unsafe impl Sync for ActiveStream {}
 
 impl AudioOutputState {
     pub fn new() -> Self {
         Self {
             host: cpal::default_host(),
             stop_flag: Arc::new(AtomicBool::new(false)),
+            active_streams: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
     pub fn stop_all_playback(&self) -> Result<(), String> {
         eprintln!("stop_all_playback: Setting stop flag");
         self.stop_flag.store(true, Ordering::Relaxed);
+        if let Ok(mut streams) = self.active_streams.lock() {
+            eprintln!(
+                "stop_all_playback: Dropping {} active stream(s)",
+                streams.len()
+            );
+            streams.clear();
+        }
         eprintln!("stop_all_playback: Stop flag set - active streams will output silence");
         Ok(())
     }
@@ -67,13 +85,22 @@ impl AudioOutputState {
         audio_data: Vec<u8>,
         device_ids: Vec<String>,
     ) -> Result<(), String> {
-        eprintln!("play_audio_to_devices called with {} bytes, {} device IDs", audio_data.len(), device_ids.len());
+        eprintln!(
+            "play_audio_to_devices called with {} bytes, {} device IDs",
+            audio_data.len(),
+            device_ids.len()
+        );
         eprintln!("Requested device IDs: {:?}", device_ids);
-        
+
         // Decode audio file (assuming WAV format)
         eprintln!("Decoding audio data...");
         let (samples, sample_rate, channels) = self.decode_wav(&audio_data)?;
-        eprintln!("Audio decoded: {} samples, {}Hz, {} channels", samples.len(), sample_rate, channels);
+        eprintln!(
+            "Audio decoded: {} samples, {}Hz, {} channels",
+            samples.len(),
+            sample_rate,
+            channels
+        );
 
         // Find devices by ID
         eprintln!("Enumerating output devices...");
@@ -100,21 +127,40 @@ impl AudioOutputState {
         }
 
         eprintln!("Playing to {} device(s)", devices.len());
-        
+
         // Stop any existing playback first
         self.stop_all_playback().ok();
-        
+
         // Reset stop flag for new playback
         self.stop_flag.store(false, Ordering::Relaxed);
-        
+
         // Play to each device
+        let mut new_streams = Vec::with_capacity(devices.len());
         for (i, device) in devices.iter().enumerate() {
             let device_name = device.name().unwrap_or_else(|_| "unknown".to_string());
-            eprintln!("Playing to device {}/{}: {}", i + 1, devices.len(), device_name);
-            self.play_to_device(device, samples.clone(), sample_rate, channels, self.stop_flag.clone())
+            eprintln!(
+                "Playing to device {}/{}: {}",
+                i + 1,
+                devices.len(),
+                device_name
+            );
+            let stream = self
+                .play_to_device(
+                    device,
+                    samples.clone(),
+                    sample_rate,
+                    channels,
+                    self.stop_flag.clone(),
+                )
                 .map_err(|e| format!("Failed to play to device {}: {}", device_name, e))?;
+            new_streams.push(ActiveStream { _stream: stream });
             eprintln!("Successfully started playback on device: {}", device_name);
         }
+
+        self.active_streams
+            .lock()
+            .map_err(|_| "Failed to store active audio streams".to_string())?
+            .extend(new_streams);
 
         eprintln!("play_audio_to_devices completed successfully");
         Ok(())
@@ -125,7 +171,10 @@ impl AudioOutputState {
         use symphonia::core::io::MediaSourceStream;
         use symphonia::core::meta::MetadataOptions;
 
-        eprintln!("decode_wav: Creating MediaSourceStream from {} bytes", data.len());
+        eprintln!(
+            "decode_wav: Creating MediaSourceStream from {} bytes",
+            data.len()
+        );
         let mss = MediaSourceStream::new(
             Box::new(std::io::Cursor::new(data.to_vec())),
             Default::default(),
@@ -144,7 +193,7 @@ impl AudioOutputState {
                 format!("Failed to probe audio: {}", e)
             })?
             .format;
-        
+
         eprintln!("decode_wav: Audio format probed successfully");
 
         eprintln!("decode_wav: Finding audio track...");
@@ -157,13 +206,10 @@ impl AudioOutputState {
                 "No audio track found".to_string()
             })?;
 
-        let sample_rate = track
-            .codec_params
-            .sample_rate
-            .ok_or_else(|| {
-                eprintln!("decode_wav: No sample rate found in track");
-                "No sample rate found".to_string()
-            })?;
+        let sample_rate = track.codec_params.sample_rate.ok_or_else(|| {
+            eprintln!("decode_wav: No sample rate found in track");
+            "No sample rate found".to_string()
+        })?;
 
         let channels = track
             .codec_params
@@ -174,7 +220,10 @@ impl AudioOutputState {
             })?
             .count() as u16;
 
-        eprintln!("decode_wav: Track info - sample_rate: {}, channels: {}", sample_rate, channels);
+        eprintln!(
+            "decode_wav: Track info - sample_rate: {}, channels: {}",
+            sample_rate, channels
+        );
 
         eprintln!("decode_wav: Creating decoder...");
         let mut decoder = symphonia::default::get_codecs()
@@ -183,7 +232,7 @@ impl AudioOutputState {
                 eprintln!("decode_wav: Failed to create decoder: {}", e);
                 format!("Failed to create decoder: {}", e)
             })?;
-        
+
         eprintln!("decode_wav: Decoder created successfully");
 
         let mut samples = Vec::new();
@@ -199,12 +248,10 @@ impl AudioOutputState {
             };
 
             packet_count += 1;
-            let decoded = decoder
-                .decode(&packet)
-                .map_err(|e| {
-                    eprintln!("decode_wav: Decode error on packet {}: {}", packet_count, e);
-                    format!("Decode error: {}", e)
-                })?;
+            let decoded = decoder.decode(&packet).map_err(|e| {
+                eprintln!("decode_wav: Decode error on packet {}: {}", packet_count, e);
+                format!("Decode error: {}", e)
+            })?;
 
             // Convert to f32 samples by matching on the buffer type
             use symphonia::core::audio::{AudioBufferRef, Signal};
@@ -214,7 +261,10 @@ impl AudioOutputState {
             let num_channels = spec.channels.count();
             let num_frames = decoded.frames();
 
-            eprintln!("decode_wav: Packet {} - {} frames, {} channels", packet_count, num_frames, num_channels);
+            eprintln!(
+                "decode_wav: Packet {} - {} frames, {} channels",
+                packet_count, num_frames, num_channels
+            );
 
             // Interleave samples from all channels
             for frame_idx in 0..num_frames {
@@ -236,8 +286,15 @@ impl AudioOutputState {
             }
         }
 
-        eprintln!("decode_wav: Decoded {} packets, total {} samples", packet_count, samples.len());
-        eprintln!("decode_wav: Returning sample_rate={}, channels={}", sample_rate, channels);
+        eprintln!(
+            "decode_wav: Decoded {} packets, total {} samples",
+            packet_count,
+            samples.len()
+        );
+        eprintln!(
+            "decode_wav: Returning sample_rate={}, channels={}",
+            sample_rate, channels
+        );
         Ok((samples, sample_rate, channels))
     }
 
@@ -248,11 +305,19 @@ impl AudioOutputState {
         sample_rate: u32,
         channels: u16,
         stop_flag: Arc<AtomicBool>,
-    ) -> Result<(), String> {
+    ) -> Result<Stream, String> {
         let device_name = device.name().unwrap_or_else(|_| "unknown".to_string());
-        eprintln!("play_to_device: Starting playback to device: {}", device_name);
-        eprintln!("play_to_device: Input - {} samples, {}Hz, {} channels", samples.len(), sample_rate, channels);
-        
+        eprintln!(
+            "play_to_device: Starting playback to device: {}",
+            device_name
+        );
+        eprintln!(
+            "play_to_device: Input - {} samples, {}Hz, {} channels",
+            samples.len(),
+            sample_rate,
+            channels
+        );
+
         let config = device
             .default_output_config()
             .map_err(|e| format!("Failed to get default config: {}", e))?;
@@ -261,15 +326,24 @@ impl AudioOutputState {
         let device_sample_rate = config.sample_rate().0;
         let device_channels = config.channels();
         let device_sample_format = config.sample_format();
-        
-        eprintln!("play_to_device: Device config - {}Hz, {} channels, format: {:?}", 
-                  device_sample_rate, device_channels, device_sample_format);
+
+        eprintln!(
+            "play_to_device: Device config - {}Hz, {} channels, format: {:?}",
+            device_sample_rate, device_channels, device_sample_format
+        );
 
         // Resample if needed (simple linear interpolation for now)
         let resampled = if device_sample_rate != sample_rate {
-            eprintln!("play_to_device: Resampling from {}Hz to {}Hz", sample_rate, device_sample_rate);
+            eprintln!(
+                "play_to_device: Resampling from {}Hz to {}Hz",
+                sample_rate, device_sample_rate
+            );
             let result = self.resample(&samples, sample_rate, device_sample_rate);
-            eprintln!("play_to_device: Resampled {} samples to {} samples", samples.len(), result.len());
+            eprintln!(
+                "play_to_device: Resampled {} samples to {} samples",
+                samples.len(),
+                result.len()
+            );
             result
         } else {
             eprintln!("play_to_device: No resampling needed");
@@ -277,9 +351,15 @@ impl AudioOutputState {
         };
 
         // Interleave/convert channels if needed
-        eprintln!("play_to_device: Interleaving channels from {} to {} channels", channels, device_channels);
+        eprintln!(
+            "play_to_device: Interleaving channels from {} to {} channels",
+            channels, device_channels
+        );
         let interleaved = self.interleave_channels(&resampled, channels, device_channels);
-        eprintln!("play_to_device: Interleaved to {} samples", interleaved.len());
+        eprintln!(
+            "play_to_device: Interleaved to {} samples",
+            interleaved.len()
+        );
 
         // Create shared buffer for playback
         let buffer: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(interleaved));
@@ -311,7 +391,7 @@ impl AudioOutputState {
                                 }
                                 return;
                             }
-                            
+
                             let mut idx = pos.load(Ordering::Relaxed);
                             let buf = buffer.lock().unwrap();
                             for sample in data.iter_mut() {
@@ -343,7 +423,7 @@ impl AudioOutputState {
                                 }
                                 return;
                             }
-                            
+
                             let mut idx = pos.load(Ordering::Relaxed);
                             let buf = buffer.lock().unwrap();
                             for sample in data.iter_mut() {
@@ -375,7 +455,7 @@ impl AudioOutputState {
                                 }
                                 return;
                             }
-                            
+
                             let mut idx = pos.load(Ordering::Relaxed);
                             let buf = buffer.lock().unwrap();
                             for sample in data.iter_mut() {
@@ -401,11 +481,11 @@ impl AudioOutputState {
             eprintln!("play_to_device: Failed to play stream: {}", e);
             format!("Failed to play stream: {}", e)
         })?;
-        
+
         eprintln!("play_to_device: Stream started successfully");
 
         eprintln!("play_to_device: Function completed successfully");
-        Ok(())
+        Ok(stream)
     }
 
     fn resample(&self, samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
@@ -444,7 +524,11 @@ impl AudioOutputState {
 
         for i in 0..samples_per_channel {
             for ch in 0..dst_channels {
-                let src_ch = if ch < src_channels { ch } else { src_channels - 1 };
+                let src_ch = if ch < src_channels {
+                    ch
+                } else {
+                    src_channels - 1
+                };
                 let idx = (i * src_channels as usize) + src_ch as usize;
                 if idx < samples.len() {
                     interleaved.push(samples[idx]);

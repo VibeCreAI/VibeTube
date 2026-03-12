@@ -1,5 +1,5 @@
 // API Types matching backend Pydantic models
-import type { LanguageCode } from '@/lib/constants/languages';
+import type { LanguageCode, TranscriptionLanguageCode } from '@/lib/constants/languages';
 
 export interface VoiceProfileCreate {
   name: string;
@@ -58,6 +58,7 @@ export interface HistoryQuery {
 
 export interface HistoryResponse extends GenerationResponse {
   profile_name: string;
+  instruct?: string;
 }
 
 export interface HistoryListResponse {
@@ -66,7 +67,7 @@ export interface HistoryListResponse {
 }
 
 export interface TranscriptionRequest {
-  language?: LanguageCode;
+  language?: TranscriptionLanguageCode;
 }
 
 export interface TranscriptionResponse {

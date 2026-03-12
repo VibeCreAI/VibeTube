@@ -174,15 +174,15 @@ export function VoicesTab() {
 
       if (deletedCount > 0) {
         toast({
-          title: 'Characters deleted',
-          description: `Deleted ${deletedCount} character${deletedCount === 1 ? '' : 's'}.`,
+          title: 'Profiles deleted',
+          description: `Deleted ${deletedCount} profile${deletedCount === 1 ? '' : 's'}.`,
         });
       }
 
       if (failedCount > 0) {
         toast({
           title: 'Some deletions failed',
-          description: `${failedCount} character${failedCount === 1 ? '' : 's'} could not be deleted.`,
+          description: `${failedCount} profile${failedCount === 1 ? '' : 's'} could not be deleted.`,
           variant: 'destructive',
         });
       }
@@ -194,7 +194,7 @@ export function VoicesTab() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-full">
-        <div className="text-muted-foreground">Loading characters...</div>
+        <div className="text-muted-foreground">Loading profiles...</div>
       </div>
     );
   }
@@ -208,7 +208,7 @@ export function VoicesTab() {
       <div className="absolute top-0 left-0 right-0 z-20">
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h1 className="text-2xl font-bold">Characters</h1>
+            <h1 className="text-2xl font-bold">Profiles</h1>
             {selectedProfileIds.length > 0 && (
               <div className="text-sm text-muted-foreground">
                 {selectedProfileIds.length} selected
@@ -224,7 +224,7 @@ export function VoicesTab() {
             )}
             <Button onClick={() => setDialogOpen(true)}>
               <Plus className="h-4 w-4 mr-2" />
-              New Character
+              New Profile
             </Button>
           </div>
         </div>

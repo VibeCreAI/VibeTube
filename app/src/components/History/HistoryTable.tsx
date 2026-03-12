@@ -8,6 +8,7 @@ import {
   MoreHorizontal,
   Play,
   PlayCircle,
+  RefreshCw,
   Square,
   Trash2,
 } from 'lucide-react';
@@ -28,10 +29,15 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
+import { HistoryRegenerateDialog } from '@/components/History/HistoryRegenerateDialog';
 import { apiClient } from '@/lib/api/client';
-import type { HistoryResponse, VibeTubeExportFormat, VibeTubeJobResponse } from '@/lib/api/types';
+import type {
+  GenerationRequest,
+  HistoryResponse,
+  VibeTubeExportFormat,
+  VibeTubeJobResponse,
+} from '@/lib/api/types';
 import { BOTTOM_SAFE_AREA_PADDING } from '@/lib/constants/ui';
 import {
   useDeleteGeneration,
@@ -39,7 +45,8 @@ import {
   useHistory,
   useImportGeneration,
 } from '@/lib/hooks/useHistory';
-import { useProfile } from '@/lib/hooks/useProfiles';
+import { useGeneration } from '@/lib/hooks/useGeneration';
+import { useProfile, useProfiles } from '@/lib/hooks/useProfiles';
 import { cn } from '@/lib/utils/cn';
 import { formatDate, formatDuration } from '@/lib/utils/format';
 import {
@@ -80,6 +87,7 @@ export function HistoryTable() {
   const [isScrolled, setIsScrolled] = useState(false);
   const [showSelectedProfileOnly, setShowSelectedProfileOnly] = useState(false);
   const [selectedGenerationIds, setSelectedGenerationIds] = useState<string[]>([]);
+  const [focusedGenerationId, setFocusedGenerationId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -91,6 +99,11 @@ export function HistoryTable() {
   );
   const [vibeDialogOpen, setVibeDialogOpen] = useState(false);
   const [selectedGeneration, setSelectedGeneration] = useState<HistoryResponse | null>(null);
+  const [regenerateDialogOpen, setRegenerateDialogOpen] = useState(false);
+  const [generationToRegenerate, setGenerationToRegenerate] = useState<HistoryResponse | null>(
+    null,
+  );
+  const [regenerateStatusMessage, setRegenerateStatusMessage] = useState('');
   const [selectedVibeJobId, setSelectedVibeJobId] = useState<string | null>(null);
   const [renderingGenerationIds, setRenderingGenerationIds] = useState<Set<string>>(new Set());
   const [isDeletingVibeRender, setIsDeletingVibeRender] = useState(false);
@@ -98,7 +111,9 @@ export function HistoryTable() {
   const limit = 20;
   const { toast } = useToast();
   const selectedProfileId = useUIStore((state) => state.selectedProfileId);
+  const setSelectedProfileId = useUIStore((state) => state.setSelectedProfileId);
   const { data: selectedProfile } = useProfile(selectedProfileId || '');
+  const { data: profiles } = useProfiles();
   const historyProfileId = showSelectedProfileOnly ? selectedProfileId || undefined : undefined;
   const historyFilterKey = historyProfileId || '__all__';
 
@@ -116,6 +131,7 @@ export function HistoryTable() {
   const deleteGeneration = useDeleteGeneration();
   const exportGenerationAudio = useExportGenerationAudio();
   const importGeneration = useImportGeneration();
+  const regenerateGeneration = useGeneration();
   const setAudioWithAutoPlay = usePlayerStore((state) => state.setAudioWithAutoPlay);
   const restartCurrentAudio = usePlayerStore((state) => state.restartCurrentAudio);
   const currentAudioId = usePlayerStore((state) => state.audioId);
@@ -241,6 +257,56 @@ export function HistoryTable() {
     }
   };
 
+  const handleRegenerateClick = (generation: HistoryResponse) => {
+    setGenerationToRegenerate(generation);
+    setRegenerateDialogOpen(true);
+  };
+
+  const handleRegenerateSubmit = (data: GenerationRequest) => {
+    setRegenerateStatusMessage('Checking model...');
+    regenerateGeneration.mutate(data, {
+      onMutate: async (variables) => {
+        setRegenerateStatusMessage('Checking model...');
+        try {
+          const modelName = `qwen-tts-${variables.model_size || '1.7B'}`;
+          const modelStatus = await apiClient.getModelStatus();
+          const model = modelStatus.models.find((entry) => entry.model_name === modelName);
+          if (model && !model.downloaded) {
+            setRegenerateStatusMessage(`Downloading ${modelName}...`);
+          } else {
+            setRegenerateStatusMessage('Generating audio...');
+          }
+        } catch {
+          setRegenerateStatusMessage('Generating audio...');
+        }
+      },
+      onSuccess: (result) => {
+        setRegenerateDialogOpen(false);
+        setGenerationToRegenerate(null);
+        setRegenerateStatusMessage('');
+        toast({
+          title: 'Audio regenerated',
+          description: 'A new generation was created from this clip.',
+        });
+        const regeneratedAudioUrl = apiClient.getAudioUrl(result.id);
+        setAudioWithAutoPlay(
+          regeneratedAudioUrl,
+          result.id,
+          result.profile_id,
+          result.text.substring(0, 50),
+        );
+      },
+      onError: (error) => {
+        setRegenerateStatusMessage('');
+        toast({
+          title: 'Failed to regenerate audio',
+          description: error instanceof Error ? error.message : 'Unknown error',
+          variant: 'destructive',
+        });
+      },
+    });
+  };
+
   const openVibeDialog = (gen: HistoryResponse) => {
     setSelectedGeneration(gen);
     setSelectedVibeJobId(null);
@@ -337,7 +403,27 @@ export function HistoryTable() {
   useEffect(() => {
     const validGenerationIds = new Set(allHistory.map((item) => item.id));
     setSelectedGenerationIds((prev) => prev.filter((id) => validGenerationIds.has(id)));
+    setFocusedGenerationId((prev) => (prev && validGenerationIds.has(prev) ? prev : null));
   }, [allHistory]);
+
+  useEffect(() => {
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest('[data-history-generation-row="true"]')) {
+        return;
+      }
+      setFocusedGenerationId(null);
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, []);
+
+  const handleFocusGeneration = (generation: HistoryResponse) => {
+    setFocusedGenerationId(generation.id);
+    setSelectedProfileId(generation.profile_id);
+  };
 
   const handleDeleteVibeRender = async (jobId: string) => {
     const confirmed = await confirm('Delete this linked VibeTube render?');
@@ -532,7 +618,7 @@ export function HistoryTable() {
           <div className="text-xs text-muted-foreground">
             {showSelectedProfileOnly && selectedProfile
               ? `Showing ${selectedProfile.name}`
-              : 'Showing all characters'}
+              : 'Showing all profiles'}
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -555,6 +641,14 @@ export function HistoryTable() {
               </Button>
             </>
           )}
+          <div className="flex items-center gap-2 rounded-full border bg-card/70 px-3 py-1.5 text-xs">
+            <Checkbox checked={allSelected} onCheckedChange={handleToggleAllGenerations} />
+            <span>
+              {selectedGenerationIds.length > 0
+                ? `${selectedGenerationIds.length} selected`
+                : 'Select all visible'}
+            </span>
+          </div>
           <div
             className={cn(
               'flex items-center gap-2 rounded-full border bg-card/70 px-3 py-1.5 text-xs',
@@ -566,7 +660,7 @@ export function HistoryTable() {
               onCheckedChange={setShowSelectedProfileOnly}
               disabled={!selectedProfileId}
             />
-            <span>Selected only</span>
+            <span>Filter by Profile</span>
           </div>
         </div>
       </div>
@@ -589,110 +683,98 @@ export function HistoryTable() {
             {history.map((gen) => {
               const isCurrentlyPlaying = currentAudioId === gen.id && isPlaying;
               const isRenderingVideo = renderingGenerationIds.has(gen.id);
-              const isSelected = selectedGenerationIds.includes(gen.id);
+              const isBulkSelected = selectedGenerationIds.includes(gen.id);
+              const isFocused = focusedGenerationId === gen.id;
               const latestLinkedJob = getLatestLinkedJob(gen);
               const hasLinkedVideo = !!latestLinkedJob;
               return (
                 <div
                   key={gen.id}
+                  data-history-generation-row="true"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => handleFocusGeneration(gen)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      handleFocusGeneration(gen);
+                    }
+                  }}
                   className={cn(
-                    'flex items-start gap-4 min-h-[126px] border rounded-md p-3 bg-card hover:bg-muted/70 transition-colors text-left w-full',
+                    'border rounded-md p-3 bg-card hover:bg-muted/70 transition-colors text-left w-full',
                     isCurrentlyPlaying && 'bg-muted/70',
-                    isSelected && 'ring-2 ring-primary/70',
+                    isFocused && 'border-cyan-400 ring-2 ring-cyan-400/70',
                   )}
                 >
-                  <div className="shrink-0 pt-1">
-                    <Checkbox
-                      checked={isSelected}
-                      onCheckedChange={(checked) => handleToggleGeneration(gen.id, checked)}
-                    />
-                  </div>
+                  <div className="flex items-start gap-4">
+                    <div
+                      className="shrink-0 pt-1"
+                      onClick={(event) => event.stopPropagation()}
+                      onKeyDown={(event) => event.stopPropagation()}
+                    >
+                      <Checkbox
+                        checked={isBulkSelected}
+                        onCheckedChange={(checked) => handleToggleGeneration(gen.id, checked)}
+                      />
+                    </div>
 
-                  {/* Waveform icon */}
-                  <div className="flex items-center shrink-0">
-                    <AudioWaveform className="h-5 w-5 text-muted-foreground" />
-                  </div>
+                    {/* Waveform icon */}
+                    <div className="flex items-center shrink-0">
+                      <AudioWaveform className="h-5 w-5 text-muted-foreground" />
+                    </div>
 
-                  {/* Left side - Meta information */}
-                  <div className="flex flex-col gap-1.5 w-48 shrink-0 justify-start pt-1">
-                    <div className="font-medium text-sm truncate" title={gen.profile_name}>
-                      {gen.profile_name}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-muted-foreground">{gen.language}</span>
-                      <span className="text-xs text-muted-foreground">
-                        {formatDuration(gen.duration)}
-                      </span>
-                    </div>
-                    <div className="text-xs text-muted-foreground">
-                      {formatDate(gen.created_at)}
-                    </div>
-                    {isRenderingVideo && (
-                      <div className="flex items-center gap-1.5 text-xs text-accent">
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        <span>Rendering video...</span>
+                    {/* Left side - Meta information */}
+                    <div className="flex flex-col gap-1.5 w-64 shrink-0 justify-start pt-1">
+                      <div className="font-medium text-sm truncate" title={gen.profile_name}>
+                        {gen.profile_name}
                       </div>
-                    )}
-                  </div>
-
-                  {/* Right side - Transcript textarea */}
-                  <div className="flex-1 min-w-0 flex flex-col gap-2">
-                    <Textarea
-                      value={gen.text}
-                      className="min-h-[72px] resize-none text-sm text-muted-foreground select-text"
-                      readOnly
-                    />
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handlePlay(gen.id, gen.text, gen.profile_id)}
-                      >
-                        <Play className="mr-1.5 h-3.5 w-3.5" />
-                        Play Audio
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() =>
-                          hasLinkedVideo ? handlePlayLatestVideo(gen) : handleRenderVibeTube(gen)
-                        }
-                        disabled={isRenderingVideo}
-                      >
-                        {hasLinkedVideo ? (
-                          <PlayCircle className="mr-1.5 h-3.5 w-3.5" />
-                        ) : (
-                          <Clapperboard className="mr-1.5 h-3.5 w-3.5" />
-                        )}
-                        {isRenderingVideo
-                          ? 'Rendering...'
-                          : hasLinkedVideo
-                            ? 'Play Video'
-                            : 'Render Video'}
-                      </Button>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-muted-foreground">{gen.language}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {formatDuration(gen.duration)}
+                        </span>
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {formatDate(gen.created_at)}
+                      </div>
+                      {isRenderingVideo && (
+                        <div className="flex items-center gap-1.5 text-xs text-accent">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          <span>Rendering video...</span>
+                        </div>
+                      )}
                     </div>
-                  </div>
 
-                  {/* Far right - Ellipsis actions */}
-                  <div className="w-10 shrink-0 flex justify-end">
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8"
-                          aria-label="Actions"
-                        >
-                          <MoreHorizontal className="h-4 w-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem
-                          onClick={() => handlePlay(gen.id, gen.text, gen.profile_id)}
-                        >
-                          <Play className="mr-2 h-4 w-4" />
-                          Play Audio
-                        </DropdownMenuItem>
+                    {/* Right side - Transcript textarea */}
+                    <div className="flex-1 min-w-0">
+                      <div
+                        className={cn(
+                          'rounded-md border bg-background px-3 py-2 text-sm text-muted-foreground whitespace-pre-wrap break-words select-text transition-all',
+                          isFocused ? 'min-h-[72px]' : 'min-h-[72px] line-clamp-3 overflow-hidden',
+                        )}
+                      >
+                        {gen.text}
+                      </div>
+                    </div>
+
+                    {/* Far right - Ellipsis actions */}
+                    <div
+                      className="w-10 shrink-0 flex justify-end"
+                      onClick={(event) => event.stopPropagation()}
+                      onKeyDown={(event) => event.stopPropagation()}
+                    >
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            aria-label="Actions"
+                          >
+                            <MoreHorizontal className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
                         <DropdownMenuItem
                           onClick={() => handleDownloadAudio(gen.id, gen.text)}
                           disabled={exportGenerationAudio.isPending}
@@ -700,57 +782,86 @@ export function HistoryTable() {
                           <Download className="mr-2 h-4 w-4" />
                           Export Audio
                         </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onClick={() => handleRenderVibeTube(gen)}
-                          disabled={isRenderingVideo}
-                        >
-                          <Clapperboard className="mr-2 h-4 w-4" />
-                          {isRenderingVideo ? 'Rendering...' : 'Render Video'}
-                        </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => openVibeDialog(gen)}>
                           <Eye className="mr-2 h-4 w-4" />
-                          Preveiw/Export Video
+                          Preview/Export Video
                         </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onClick={() => handleDeleteClick(gen.id, gen.profile_name)}
-                          disabled={deleteGeneration.isPending}
-                          className="text-destructive focus:text-destructive"
-                        >
-                          <Trash2 className="mr-2 h-4 w-4" />
-                          Delete
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap items-center gap-2 pl-[4.5rem]">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        handlePlay(gen.id, gen.text, gen.profile_id);
+                      }}
+                      onMouseDown={(event) => event.stopPropagation()}
+                      className="shrink-0"
+                    >
+                      <Play className="mr-1.5 h-3.5 w-3.5" />
+                      Play Audio
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        if (hasLinkedVideo) {
+                          handlePlayLatestVideo(gen);
+                        } else {
+                          void handleRenderVibeTube(gen);
+                        }
+                      }}
+                      onMouseDown={(event) => event.stopPropagation()}
+                      disabled={isRenderingVideo}
+                      className="shrink-0"
+                    >
+                      {hasLinkedVideo ? (
+                        <PlayCircle className="mr-1.5 h-3.5 w-3.5" />
+                      ) : (
+                        <Clapperboard className="mr-1.5 h-3.5 w-3.5" />
+                      )}
+                      {isRenderingVideo
+                        ? 'Rendering...'
+                        : hasLinkedVideo
+                          ? 'Play Video'
+                          : 'Render Video'}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        handleRegenerateClick(gen);
+                      }}
+                      onMouseDown={(event) => event.stopPropagation()}
+                      className="shrink-0"
+                    >
+                      <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+                      Regenerate
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        handleDeleteClick(gen.id, gen.profile_name);
+                      }}
+                      onMouseDown={(event) => event.stopPropagation()}
+                      disabled={deleteGeneration.isPending}
+                      className="shrink-0 text-destructive hover:text-destructive"
+                    >
+                      <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                      Delete
+                    </Button>
                   </div>
                 </div>
               );
             })}
-
-            {history.length > 0 && (
-              <div className="sticky bottom-0 z-10 -mx-0 rounded-md border bg-background/95 p-3 backdrop-blur">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2 text-sm">
-                    <Checkbox checked={allSelected} onCheckedChange={handleToggleAllGenerations} />
-                    <span className="text-muted-foreground">
-                      {selectedGenerationIds.length > 0
-                        ? `${selectedGenerationIds.length} selected`
-                        : 'Select all visible'}
-                    </span>
-                  </div>
-                  {selectedGenerationIds.length > 0 && (
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      onClick={handleBulkDelete}
-                      disabled={isBulkDeleting}
-                    >
-                      <Trash2 className="mr-2 h-4 w-4" />
-                      {isBulkDeleting ? 'Deleting...' : 'Delete Selected'}
-                    </Button>
-                  )}
-                </div>
-              </div>
-            )}
 
             {/* Load more trigger element */}
             {hasMore && (
@@ -948,6 +1059,22 @@ export function HistoryTable() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <HistoryRegenerateDialog
+        open={regenerateDialogOpen}
+        generation={generationToRegenerate}
+        profiles={profiles || []}
+        isSubmitting={regenerateGeneration.isPending}
+        statusMessage={regenerateStatusMessage}
+        onOpenChange={(open) => {
+          setRegenerateDialogOpen(open);
+          if (!open) {
+            setGenerationToRegenerate(null);
+            setRegenerateStatusMessage('');
+          }
+        }}
+        onSubmit={handleRegenerateSubmit}
+      />
     </div>
   );
 }

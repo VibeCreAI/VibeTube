@@ -32,11 +32,11 @@ export function ProfileList() {
             <CardContent className="flex flex-col items-center justify-center py-12">
               <Mic className="h-12 w-12 text-muted-foreground mb-4" />
               <p className="text-muted-foreground mb-4">
-                No voice profiles yet. Create your first profile to get started.
+                No profiles yet. Create your first profile to get started.
               </p>
               <Button onClick={() => setDialogOpen(true)}>
                 <Sparkles className="mr-2 h-4 w-4" />
-                Create Voice
+                Create Profile
               </Button>
             </CardContent>
           </Card>

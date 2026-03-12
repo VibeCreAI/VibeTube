@@ -1,11 +1,11 @@
-﻿// NOTE: This test requires system audio to be playing during execution.
+// NOTE: This test requires system audio to be playing during execution.
 // To run this test successfully:
 //   1. Start playing audio (music, video, etc.)
 //   2. Run: cargo test --test audio_capture_test -- --nocapture
 //   3. The test will capture audio for 5 seconds and verify the output
 
-use vibetube::audio_capture::{AudioCaptureState, start_capture, stop_capture};
 use base64::Engine;
+use vibetube::audio_capture::{start_capture, stop_capture, AudioCaptureState};
 
 #[tokio::test]
 async fn test_system_audio_capture() {
@@ -57,4 +57,3 @@ async fn test_system_audio_capture() {
         }
     }
 }
-

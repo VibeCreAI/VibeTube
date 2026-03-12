@@ -19,21 +19,17 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import type {
-  StoryItemDetail,
-  StoryItemRegenerateRequest,
-  VoiceProfileResponse,
-} from '@/lib/api/types';
+import type { GenerationRequest, HistoryResponse, VoiceProfileResponse } from '@/lib/api/types';
 import { LANGUAGE_OPTIONS, type LanguageCode } from '@/lib/constants/languages';
 
-interface StoryRegenerateDialogProps {
+interface HistoryRegenerateDialogProps {
   open: boolean;
-  item: StoryItemDetail | null;
+  generation: HistoryResponse | null;
   profiles: VoiceProfileResponse[];
   isSubmitting: boolean;
   statusMessage?: string;
   onOpenChange: (open: boolean) => void;
-  onSubmit: (data: StoryItemRegenerateRequest) => void;
+  onSubmit: (data: GenerationRequest) => void;
 }
 
 interface FormState {
@@ -45,34 +41,34 @@ interface FormState {
   instruct: string;
 }
 
-function buildFormState(item: StoryItemDetail | null): FormState {
+function buildFormState(generation: HistoryResponse | null): FormState {
   return {
-    profileId: item?.profile_id || '',
-    text: item?.text || '',
-    language: (item?.language as LanguageCode) || 'en',
+    profileId: generation?.profile_id || '',
+    text: generation?.text || '',
+    language: (generation?.language as LanguageCode) || 'en',
     modelSize: '1.7B',
     seed: '',
-    instruct: item?.instruct || '',
+    instruct: generation?.instruct || '',
   };
 }
 
-export function StoryRegenerateDialog({
+export function HistoryRegenerateDialog({
   open,
-  item,
+  generation,
   profiles,
   isSubmitting,
   statusMessage,
   onOpenChange,
   onSubmit,
-}: StoryRegenerateDialogProps) {
-  const [formState, setFormState] = useState<FormState>(() => buildFormState(item));
+}: HistoryRegenerateDialogProps) {
+  const [formState, setFormState] = useState<FormState>(() => buildFormState(generation));
   const selectedProfile = profiles.find((profile) => profile.id === formState.profileId);
 
   useEffect(() => {
     if (open) {
-      setFormState(buildFormState(item));
+      setFormState(buildFormState(generation));
     }
-  }, [open, item]);
+  }, [open, generation]);
 
   useEffect(() => {
     if (!open || !selectedProfile?.language) {
@@ -99,10 +95,10 @@ export function StoryRegenerateDialog({
     <Dialog open={open} onOpenChange={(nextOpen) => !isSubmitting && onOpenChange(nextOpen)}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Regenerate Clip</DialogTitle>
+          <DialogTitle>Regenerate Audio</DialogTitle>
           <DialogDescription>
-            Replace this story item in the same position. You can keep the current voice and text or
-            change them before regenerating.
+            Create a new generation from this clip’s current voice and text, or change them before
+            regenerating.
           </DialogDescription>
         </DialogHeader>
 
@@ -203,15 +199,15 @@ export function StoryRegenerateDialog({
                     <Loader2 className="h-5 w-5 animate-spin text-accent" />
                   </div>
                   <div className="min-w-0">
-                    <div className="text-sm font-medium">Replacing clip...</div>
+                    <div className="text-sm font-medium">Generating audio...</div>
                     <div className="truncate text-xs text-muted-foreground">
-                      {statusMessage || 'Generating updated audio'}
+                      {statusMessage || 'Creating a new version'}
                     </div>
                   </div>
                 </div>
               ) : (
                 <div className="text-xs text-muted-foreground">
-                  The new clip will stay in the same story slot.
+                  The regenerated clip will appear as a new generation.
                 </div>
               )}
             </div>

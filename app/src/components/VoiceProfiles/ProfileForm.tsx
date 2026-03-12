@@ -1,5 +1,15 @@
 import { zodResolver } from '@hookform/resolvers/zod';
-import { ChevronDown, Edit2, Loader2, Mic, Monitor, Sparkles, Upload, X } from 'lucide-react';
+import {
+  ChevronDown,
+  Edit2,
+  Loader2,
+  Mic,
+  Monitor,
+  Sparkles,
+  Upload,
+  UserRound,
+  X,
+} from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import * as z from 'zod';
@@ -32,10 +42,16 @@ import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
 import { apiClient } from '@/lib/api/client';
 import type { ImageModelStatusResponse } from '@/lib/api/types';
-import { LANGUAGE_CODES, LANGUAGE_OPTIONS, type LanguageCode } from '@/lib/constants/languages';
+import {
+  LANGUAGE_CODES,
+  LANGUAGE_OPTIONS,
+  type LanguageCode,
+  type TranscriptionLanguageCode,
+} from '@/lib/constants/languages';
+import { getVoiceSampleScript, type RecordingPromptMode } from '@/lib/constants/voiceSampleScripts';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
-import { useAudioRecording } from '@/lib/hooks/useAudioRecording';
 import type { AudioProcessingOptions } from '@/lib/hooks/useAudioRecording';
+import { useAudioRecording } from '@/lib/hooks/useAudioRecording';
 import {
   useAddSample,
   useCreateProfile,
@@ -58,7 +74,9 @@ import { type ProfileFormDraft, useUIStore } from '@/stores/uiStore';
 import { AudioSampleRecording } from './AudioSampleRecording';
 import { AudioSampleSystem } from './AudioSampleSystem';
 import { AudioSampleUpload } from './AudioSampleUpload';
+import { RecordingPromptField } from './RecordingPromptField';
 import { SampleList } from './SampleList';
+import { TranscriptionLanguageField } from './TranscriptionLanguageField';
 
 const MAX_AUDIO_DURATION_SECONDS = 30;
 
@@ -179,6 +197,9 @@ export function ProfileForm() {
   const transcribe = useTranscription();
   const { toast } = useToast();
   const [sampleMode, setSampleMode] = useState<'upload' | 'record' | 'system'>('record');
+  const [transcriptionLanguage, setTranscriptionLanguage] =
+    useState<TranscriptionLanguageCode>('auto');
+  const [recordingPromptMode, setRecordingPromptMode] = useState<RecordingPromptMode>('script');
   const [recordGainDb, setRecordGainDb] = useState(0);
   const [audioProcessing, setAudioProcessing] = useState<AudioProcessingOptions>({
     autoGainControl: true,
@@ -241,11 +262,14 @@ export function ProfileForm() {
 
   const selectedFile = form.watch('sampleFile');
   const selectedAvatarFile = form.watch('avatarFile');
+  const selectedLanguage = form.watch('language');
   const parsedAvatarSeed = avatarGenerateSeed.trim() ? Number(avatarGenerateSeed) : undefined;
   const hasAnyGeneratedPreview = Object.values(generatedStatePreviews).some(Boolean);
   const isImageModelReady = Boolean(imageModelStatus?.downloaded);
   const isImageModelDownloading =
     Boolean(imageModelStatus?.downloading) || isImageModelDownloadStarting;
+  const shouldShowTranscriptionControls =
+    sampleMode !== 'record' || recordingPromptMode === 'custom';
 
   // Validate audio duration when file is selected
   useEffect(() => {
@@ -411,6 +435,8 @@ export function ProfileForm() {
         referenceText: undefined,
         avatarFile: undefined,
       });
+      setTranscriptionLanguage('auto');
+      setRecordingPromptMode('script');
     } else if (profileFormDraft && open) {
       // Restore from draft when opening in create mode
       form.reset({
@@ -422,6 +448,8 @@ export function ProfileForm() {
         avatarFile: undefined,
       });
       setSampleMode(profileFormDraft.sampleMode);
+      setTranscriptionLanguage(profileFormDraft.transcriptionLanguage || 'auto');
+      setRecordingPromptMode(profileFormDraft.recordingPromptMode || 'script');
       // Restore the file if we have it saved
       if (
         profileFormDraft.sampleFileData &&
@@ -446,6 +474,8 @@ export function ProfileForm() {
         avatarFile: undefined,
       });
       setSampleMode('record');
+      setTranscriptionLanguage('auto');
+      setRecordingPromptMode('script');
       setRecordGainDb(0);
       setAvatarPreview(null);
       setAvatarGeneratePrompt('');
@@ -463,6 +493,17 @@ export function ProfileForm() {
       });
     }
   }, [editingProfile, profileFormDraft, open, form]);
+
+  useEffect(() => {
+    if (sampleMode !== 'record' || recordingPromptMode !== 'script') {
+      return;
+    }
+
+    form.setValue('referenceText', getVoiceSampleScript(selectedLanguage), {
+      shouldValidate: true,
+    });
+    form.clearErrors('referenceText');
+  }, [form, recordingPromptMode, sampleMode, selectedLanguage]);
 
   useEffect(() => {
     if (!open || !editingProfileId) {
@@ -501,30 +542,26 @@ export function ProfileForm() {
         setHasSavedVibeTubePack(pack.complete);
         const t = Date.now();
         setAvatarStatePreviews((prev) => ({
-          idle:
-            prev.idle?.startsWith('blob:')
-              ? prev.idle
-              : pack.idle_url
-                ? `${apiClient.getVibeTubeAvatarStateUrl(editingProfileId, 'idle')}?t=${t}`
-                : null,
-          talk:
-            prev.talk?.startsWith('blob:')
-              ? prev.talk
-              : pack.talk_url
-                ? `${apiClient.getVibeTubeAvatarStateUrl(editingProfileId, 'talk')}?t=${t}`
-                : null,
-          idle_blink:
-            prev.idle_blink?.startsWith('blob:')
-              ? prev.idle_blink
-              : pack.idle_blink_url
-                ? `${apiClient.getVibeTubeAvatarStateUrl(editingProfileId, 'idle_blink')}?t=${t}`
-                : null,
-          talk_blink:
-            prev.talk_blink?.startsWith('blob:')
-              ? prev.talk_blink
-              : pack.talk_blink_url
-                ? `${apiClient.getVibeTubeAvatarStateUrl(editingProfileId, 'talk_blink')}?t=${t}`
-                : null,
+          idle: prev.idle?.startsWith('blob:')
+            ? prev.idle
+            : pack.idle_url
+              ? `${apiClient.getVibeTubeAvatarStateUrl(editingProfileId, 'idle')}?t=${t}`
+              : null,
+          talk: prev.talk?.startsWith('blob:')
+            ? prev.talk
+            : pack.talk_url
+              ? `${apiClient.getVibeTubeAvatarStateUrl(editingProfileId, 'talk')}?t=${t}`
+              : null,
+          idle_blink: prev.idle_blink?.startsWith('blob:')
+            ? prev.idle_blink
+            : pack.idle_blink_url
+              ? `${apiClient.getVibeTubeAvatarStateUrl(editingProfileId, 'idle_blink')}?t=${t}`
+              : null,
+          talk_blink: prev.talk_blink?.startsWith('blob:')
+            ? prev.talk_blink
+            : pack.talk_blink_url
+              ? `${apiClient.getVibeTubeAvatarStateUrl(editingProfileId, 'talk_blink')}?t=${t}`
+              : null,
         }));
         return apiClient.getVibeTubeAvatarPreview(editingProfileId).catch(() => null);
       })
@@ -583,7 +620,7 @@ export function ProfileForm() {
             setIsImageModelDownloadStarting(false);
           }
         }
-      } catch (error) {
+      } catch (_error) {
         if (!cancelled) {
           setImageModelStatus(null);
         }
@@ -617,8 +654,7 @@ export function ProfileForm() {
     }
 
     try {
-      const language = form.getValues('language');
-      const result = await transcribe.mutateAsync({ file, language });
+      const result = await transcribe.mutateAsync({ file, language: transcriptionLanguage });
 
       form.setValue('referenceText', result.text, { shouldValidate: true });
     } catch (error) {
@@ -696,30 +732,26 @@ export function ProfileForm() {
     setHasSavedVibeTubePack(pack.complete);
     const t = Date.now();
     setAvatarStatePreviews((prev) => ({
-      idle:
-        prev.idle?.startsWith('blob:')
-          ? prev.idle
-          : pack.idle_url
-            ? `${apiClient.getVibeTubeAvatarStateUrl(profileId, 'idle')}?t=${t}`
-            : null,
-      talk:
-        prev.talk?.startsWith('blob:')
-          ? prev.talk
-          : pack.talk_url
-            ? `${apiClient.getVibeTubeAvatarStateUrl(profileId, 'talk')}?t=${t}`
-            : null,
-      idle_blink:
-        prev.idle_blink?.startsWith('blob:')
-          ? prev.idle_blink
-          : pack.idle_blink_url
-            ? `${apiClient.getVibeTubeAvatarStateUrl(profileId, 'idle_blink')}?t=${t}`
-            : null,
-      talk_blink:
-        prev.talk_blink?.startsWith('blob:')
-          ? prev.talk_blink
-          : pack.talk_blink_url
-            ? `${apiClient.getVibeTubeAvatarStateUrl(profileId, 'talk_blink')}?t=${t}`
-            : null,
+      idle: prev.idle?.startsWith('blob:')
+        ? prev.idle
+        : pack.idle_url
+          ? `${apiClient.getVibeTubeAvatarStateUrl(profileId, 'idle')}?t=${t}`
+          : null,
+      talk: prev.talk?.startsWith('blob:')
+        ? prev.talk
+        : pack.talk_url
+          ? `${apiClient.getVibeTubeAvatarStateUrl(profileId, 'talk')}?t=${t}`
+          : null,
+      idle_blink: prev.idle_blink?.startsWith('blob:')
+        ? prev.idle_blink
+        : pack.idle_blink_url
+          ? `${apiClient.getVibeTubeAvatarStateUrl(profileId, 'idle_blink')}?t=${t}`
+          : null,
+      talk_blink: prev.talk_blink?.startsWith('blob:')
+        ? prev.talk_blink
+        : pack.talk_blink_url
+          ? `${apiClient.getVibeTubeAvatarStateUrl(profileId, 'talk_blink')}?t=${t}`
+          : null,
     }));
   }
 
@@ -748,7 +780,17 @@ export function ProfileForm() {
     };
   }
 
-  function applyGeneratedPreviewUrls(profileId: string, preview: { idle_url?: string; idle_ready?: boolean; talk_url?: string; idle_blink_url?: string; talk_blink_url?: string; complete: boolean; }) {
+  function applyGeneratedPreviewUrls(
+    profileId: string,
+    preview: {
+      idle_url?: string;
+      idle_ready?: boolean;
+      talk_url?: string;
+      idle_blink_url?: string;
+      talk_blink_url?: string;
+      complete: boolean;
+    },
+  ) {
     const t = Date.now();
     setGeneratedStatePreviews({
       idle: preview.idle_url
@@ -881,7 +923,8 @@ export function ProfileForm() {
     } catch (error) {
       toast({
         title: 'State generation failed',
-        description: error instanceof Error ? error.message : 'Failed to generate remaining states.',
+        description:
+          error instanceof Error ? error.message : 'Failed to generate remaining states.',
         variant: 'destructive',
       });
     } finally {
@@ -952,7 +995,8 @@ export function ProfileForm() {
     if (hasAnyAvatarStateFile && !hasAllAvatarStateFiles) {
       toast({
         title: 'Incomplete Avatar State Pack',
-        description: 'Upload all 4 state images (idle, talk, idle blink, talk blink) to save VibeTube avatar states.',
+        description:
+          'Upload all 4 state images (idle, talk, idle blink, talk blink) to save VibeTube avatar states.',
         variant: 'destructive',
       });
       return;
@@ -999,7 +1043,9 @@ export function ProfileForm() {
             toast({
               title: 'VibeTube avatar states upload failed',
               description:
-                packError instanceof Error ? packError.message : 'Failed to save 4-state avatar pack.',
+                packError instanceof Error
+                  ? packError.message
+                  : 'Failed to save 4-state avatar pack.',
               variant: 'destructive',
             });
           }
@@ -1130,7 +1176,9 @@ export function ProfileForm() {
               toast({
                 title: 'VibeTube avatar states upload failed',
                 description:
-                  packError instanceof Error ? packError.message : 'Failed to save 4-state avatar pack.',
+                  packError instanceof Error
+                    ? packError.message
+                    : 'Failed to save 4-state avatar pack.',
                 variant: 'destructive',
               });
             }
@@ -1167,13 +1215,20 @@ export function ProfileForm() {
       // Save draft when closing the create modal
       const values = form.getValues();
       const hasContent =
-        values.name || values.description || values.referenceText || values.sampleFile;
+        values.name ||
+        values.description ||
+        values.referenceText ||
+        values.sampleFile ||
+        transcriptionLanguage !== 'auto' ||
+        recordingPromptMode !== 'script';
 
       if (hasContent) {
         const draft: ProfileFormDraft = {
           name: values.name || '',
           description: values.description || '',
           language: values.language || 'en',
+          transcriptionLanguage,
+          recordingPromptMode,
           referenceText: values.referenceText || '',
           sampleMode,
         };
@@ -1213,12 +1268,12 @@ export function ProfileForm() {
         <div className="max-w-5xl max-h-[85vh] mx-auto my-auto w-full flex flex-col">
           <DialogHeader>
             <DialogTitle className="text-2xl">
-              {editingProfileId ? 'Edit Voice' : 'Clone voice'}
+              {editingProfileId ? 'Edit Profile' : 'Create Profile'}
             </DialogTitle>
             <DialogDescription>
               {editingProfileId
-                ? 'Update your voice profile details and manage samples.'
-                : 'Create a new voice profile with an audio sample to clone the voice.'}
+                ? 'Update your profile details and manage samples.'
+                : 'Create a new profile with an audio sample to clone the voice.'}
             </DialogDescription>
             {isCreating && profileFormDraft && (
               <div className="flex items-center gap-2 pt-2">
@@ -1238,6 +1293,8 @@ export function ProfileForm() {
                       referenceText: '',
                     });
                     setSampleMode('record');
+                    setTranscriptionLanguage('auto');
+                    setRecordingPromptMode('script');
                   }}
                 >
                   <X className="h-3 w-3 mr-1" />
@@ -1249,6 +1306,25 @@ export function ProfileForm() {
 
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="flex-1 min-h-0 flex flex-col">
+              <div className="grid gap-6 grid-cols-2 pb-4">
+                <div className="border-r pr-6">
+                  <div className="space-y-1">
+                    <h3 className="text-lg font-semibold">Voice</h3>
+                    <p className="text-sm text-muted-foreground">
+                      Add or manage the sample audio used to clone the voice.
+                    </p>
+                  </div>
+                </div>
+                <div>
+                  <div className="space-y-1">
+                    <h3 className="text-lg font-semibold">Profile</h3>
+                    <p className="text-sm text-muted-foreground">
+                      Set the profile details first, then add avatar assets below.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
               <div className="grid gap-6 grid-cols-2 flex-1 overflow-y-auto min-h-0">
                 {/* Left column: Sample management */}
                 <div className="space-y-4 border-r pr-6">
@@ -1311,52 +1387,58 @@ export function ProfileForm() {
                           />
                         </TabsContent>
 
-              <TabsContent value="record" className="space-y-4">
-                <FormField
-                  control={form.control}
-                  name="sampleFile"
-                  render={() => (
-                    <AudioSampleRecording
-                      file={selectedFile}
-                      isRecording={isRecording}
-                      duration={duration}
-                      audioProcessing={audioProcessing}
-                      onAudioProcessingChange={setAudioProcessing}
-                      onStart={startRecording}
-                      onStop={stopRecording}
-                      onCancel={handleCancelRecording}
-                      onTranscribe={handleTranscribe}
-                      onPlayPause={handlePlayPause}
-                      isPlaying={isPlaying}
-                      isTranscribing={transcribe.isPending}
-                    />
-                  )}
-                />
-                {selectedFile && !isRecording && (
-                  <FormItem>
-                    <FormLabel>Recorded Sample Gain (dB)</FormLabel>
-                    <div className="flex items-center gap-3">
-                      <Input
-                        type="range"
-                        min={-12}
-                        max={24}
-                        step={1}
-                        value={recordGainDb}
-                        onChange={(e) => setRecordGainDb(Number(e.target.value))}
-                      />
-                      <Input
-                        type="number"
-                        min={-12}
-                        max={24}
-                        step={1}
-                        value={recordGainDb}
-                        onChange={(e) => setRecordGainDb(Number(e.target.value))}
-                        className="w-20"
-                      />
-                    </div>
-                  </FormItem>
-                )}
-              </TabsContent>
+                        <TabsContent value="record" className="space-y-4">
+                          <RecordingPromptField
+                            language={selectedLanguage}
+                            mode={recordingPromptMode}
+                            onModeChange={setRecordingPromptMode}
+                          />
+                          <FormField
+                            control={form.control}
+                            name="sampleFile"
+                            render={() => (
+                              <AudioSampleRecording
+                                file={selectedFile}
+                                isRecording={isRecording}
+                                duration={duration}
+                                audioProcessing={audioProcessing}
+                                onAudioProcessingChange={setAudioProcessing}
+                                onStart={startRecording}
+                                onStop={stopRecording}
+                                onCancel={handleCancelRecording}
+                                onTranscribe={handleTranscribe}
+                                onPlayPause={handlePlayPause}
+                                isPlaying={isPlaying}
+                                isTranscribing={transcribe.isPending}
+                                showTranscribeButton={recordingPromptMode === 'custom'}
+                              />
+                            )}
+                          />
+                          {selectedFile && !isRecording && (
+                            <FormItem>
+                              <FormLabel>Recorded Sample Gain (dB)</FormLabel>
+                              <div className="flex items-center gap-3">
+                                <Input
+                                  type="range"
+                                  min={-12}
+                                  max={24}
+                                  step={1}
+                                  value={recordGainDb}
+                                  onChange={(e) => setRecordGainDb(Number(e.target.value))}
+                                />
+                                <Input
+                                  type="number"
+                                  min={-12}
+                                  max={24}
+                                  step={1}
+                                  value={recordGainDb}
+                                  onChange={(e) => setRecordGainDb(Number(e.target.value))}
+                                  className="w-20"
+                                />
+                              </div>
+                            </FormItem>
+                          )}
+                        </TabsContent>
 
                         {platform.metadata.isTauri && isSystemAudioSupported && (
                           <TabsContent value="system" className="space-y-4">
@@ -1382,6 +1464,19 @@ export function ProfileForm() {
                         )}
                       </Tabs>
 
+                      {shouldShowTranscriptionControls ? (
+                        <TranscriptionLanguageField
+                          value={transcriptionLanguage}
+                          onChange={setTranscriptionLanguage}
+                          disabled={transcribe.isPending}
+                        />
+                      ) : (
+                        <p className="text-sm text-muted-foreground">
+                          Sample script mode fills the reference text automatically, so
+                          transcription is not needed.
+                        </p>
+                      )}
+
                       <FormField
                         control={form.control}
                         name="referenceText"
@@ -1392,6 +1487,9 @@ export function ProfileForm() {
                               <Textarea
                                 placeholder="Enter the exact text spoken in the audio..."
                                 className="min-h-[100px]"
+                                readOnly={
+                                  sampleMode === 'record' && recordingPromptMode === 'script'
+                                }
                                 {...field}
                               />
                             </FormControl>
@@ -1429,7 +1527,7 @@ export function ProfileForm() {
                                     className="h-full w-full object-cover"
                                   />
                                 ) : (
-                                  <Mic className="h-10 w-10 text-muted-foreground" />
+                                  <UserRound className="h-10 w-10 text-muted-foreground" />
                                 )}
                               </div>
                               <button
@@ -1464,6 +1562,59 @@ export function ProfileForm() {
                     )}
                   />
 
+                  <FormField
+                    control={form.control}
+                    name="name"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Name</FormLabel>
+                        <FormControl>
+                          <Input placeholder="My Profile" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name="description"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Description (Optional)</FormLabel>
+                        <FormControl>
+                          <Textarea placeholder="Describe this profile..." {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name="language"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Language</FormLabel>
+                        <Select value={field.value} onValueChange={field.onChange}>
+                          <FormControl>
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            {LANGUAGE_OPTIONS.map((lang) => (
+                              <SelectItem key={lang.value} value={lang.value}>
+                                {lang.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
                   <div className="rounded-lg border bg-card/40 p-3 flex flex-col gap-3">
                     <div>
                       <p className="text-sm font-medium">VibeTube Avatar State Images</p>
@@ -1489,216 +1640,236 @@ export function ProfileForm() {
                       )}
                       {isAvatarGenPanelOpen && (
                         <>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                        <div className="space-y-1">
-                          <p className="text-[11px] text-muted-foreground">Model</p>
-                          <div className="rounded-md border bg-background/70 px-3 py-2 text-sm">
-                            {AVATAR_TEST_MODEL_LABEL}
-                          </div>
-                        </div>
-                        <div className="space-y-1">
-                          <p className="text-[11px] text-muted-foreground">Quality</p>
-                          <Select
-                            value={avatarQualityPreset}
-                            onValueChange={(v) => setAvatarQualityPreset(v as AvatarQualityPreset)}
-                          >
-                            <SelectTrigger>
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="fast">Fast</SelectItem>
-                              <SelectItem value="balanced">Balanced</SelectItem>
-                              <SelectItem value="high">High</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </div>
-                      </div>
-                      <p className="text-[11px] text-muted-foreground">
-                        {AVATAR_TEST_MODEL_NOTE} This model is not bundled with the app.
-                      </p>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          disabled={isImageModelReady || isImageModelDownloading || isImageModelStatusLoading}
-                          onClick={downloadImageTestModel}
-                        >
-                          {isImageModelDownloading ? (
-                            <>
-                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                              Downloading...
-                            </>
-                          ) : isImageModelReady ? (
-                            'Model Ready'
-                          ) : (
-                            'Download Model'
-                          )}
-                        </Button>
-                        <a
-                          href={AVATAR_TEST_MODEL_DOWNLOAD_URL}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="inline-flex text-[11px] text-cyan-400 hover:text-cyan-300 underline underline-offset-4"
-                        >
-                          Direct download link
-                        </a>
-                      </div>
-                      <p className="text-[11px] text-muted-foreground">
-                        {isImageModelStatusLoading
-                          ? 'Checking local model status...'
-                          : isImageModelReady
-                            ? `Model downloaded to ${imageModelStatus?.file_path ?? AVATAR_TEST_MODEL_ID}`
-                            : isImageModelDownloading
-                              ? `Downloading to ${AVATAR_TEST_MODEL_ID}...`
-                              : `If you test this feature, the app downloads the model to ${AVATAR_TEST_MODEL_ID}.`}
-                      </p>
-                      <div className="space-y-1">
-                        <p className="text-[11px] text-muted-foreground">Style Preset</p>
-                        <Select value={avatarStylePreset} onValueChange={setAvatarStylePreset}>
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="none">None</SelectItem>
-                            <SelectItem value="chibi">Chibi Portrait</SelectItem>
-                            <SelectItem value="hoodie">Cozy Hoodie</SelectItem>
-                            <SelectItem value="retro_hero">Retro Hero</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <Textarea
-                        value={avatarGeneratePrompt}
-                        onChange={(e) => setAvatarGeneratePrompt(e.target.value)}
-                        placeholder="Describe how the character should look (added to the system style prompt)."
-                        className="min-h-[84px]"
-                      />
-                      <p className="text-[11px] text-muted-foreground">
-                        Keep prompt short (about 5-20 words) for SD1.x models to avoid CLIP truncation.
-                      </p>
-                      <div className="flex items-center gap-2">
-                        <Input
-                          value={avatarGenerateSeed}
-                          onChange={(e) => setAvatarGenerateSeed(e.target.value)}
-                          placeholder="Seed (optional)"
-                          inputMode="numeric"
-                        />
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          disabled={
-                            !editingProfileId ||
-                            !isImageModelReady ||
-                            isGeneratingAvatarPack ||
-                            isApplyingGeneratedAvatarPack
-                          }
-                          onClick={() => editingProfileId && generateIdlePreviewForProfile(editingProfileId)}
-                        >
-                          {isGeneratingAvatarPack && avatarGenerationStage === 'idle' ? (
-                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                          ) : (
-                            <Sparkles className="h-4 w-4 mr-2" />
-                          )}
-                          {isGeneratingAvatarPack && avatarGenerationStage === 'idle'
-                            ? 'Generating Idle...'
-                            : 'Generate Idle'}
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          disabled={
-                            !editingProfileId ||
-                            !isImageModelReady ||
-                            !isIdlePreviewReady ||
-                            isGeneratingAvatarPack ||
-                            isApplyingGeneratedAvatarPack
-                          }
-                          onClick={() => editingProfileId && generateRestPreviewForProfile(editingProfileId)}
-                        >
-                          {isGeneratingAvatarPack && avatarGenerationStage === 'rest' ? (
-                            <>
-                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                              Generating Rest 3...
-                            </>
-                          ) : (
-                            'Generate Rest 3'
-                          )}
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="default"
-                          disabled={
-                            !editingProfileId ||
-                            !hasPendingGeneratedPreview ||
-                            isGeneratingAvatarPack ||
-                            isApplyingGeneratedAvatarPack
-                          }
-                          onClick={() => editingProfileId && applyGeneratedAvatarPack(editingProfileId)}
-                        >
-                          {isApplyingGeneratedAvatarPack ? 'Applying...' : 'Apply'}
-                        </Button>
-                      </div>
-                      {isGeneratingAvatarPack && (
-                        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          {avatarGenerationStage === 'idle'
-                            ? 'Generating idle preview...'
-                            : 'Generating talk/blink states from idle...'}
-                        </div>
-                      )}
-                      <p className="text-[11px] text-muted-foreground">
-                        Generates at native 512x512 for higher quality and more reliable expression edits.
-                      </p>
-                      <p className="text-[11px] text-muted-foreground">
-                        Step 1: Generate Idle. Step 2: Generate Rest 3 from idle. Step 3: Apply.
-                      </p>
-                      {!editingProfileId && (
-                        <p className="text-[11px] text-muted-foreground">
-                          Save the profile first to use one-click generation.
-                        </p>
-                      )}
-                      {hasAnyGeneratedPreview && (
-                        <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-2 space-y-2">
-                          <p className="text-xs font-medium">
-                            Generated Preview {!hasPendingGeneratedPreview ? '(Idle Only / In Progress)' : '(Not Applied Yet)'}
-                          </p>
-                          <div className="grid grid-cols-4 gap-2">
-                            {AVATAR_STATE_DEFS.map((def) => (
-                              <div key={`preview-${def.key}`} className="text-center space-y-1">
-                                <div
-                                  className="h-16 w-16 mx-auto rounded border overflow-hidden"
-                                  style={{
-                                    backgroundImage:
-                                      'linear-gradient(45deg, #1a1a1a 25%, transparent 25%), linear-gradient(-45deg, #1a1a1a 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #1a1a1a 75%), linear-gradient(-45deg, transparent 75%, #1a1a1a 75%)',
-                                    backgroundSize: '10px 10px',
-                                    backgroundPosition: '0 0, 0 5px, 5px -5px, -5px 0px',
-                                    backgroundColor: '#111',
-                                  }}
-                                >
-                                  {generatedStatePreviews[def.key] ? (
-                                    <img
-                                      src={generatedStatePreviews[def.key] ?? undefined}
-                                      alt={`${def.label} preview`}
-                                      className="h-full w-full object-contain"
-                                    />
-                                  ) : (
-                                    <div className="h-full w-full flex items-center justify-center text-[9px] text-muted-foreground">
-                                      No preview
-                                    </div>
-                                  )}
-                                </div>
-                                <p className="text-[10px] text-muted-foreground">{def.key}</p>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                            <div className="space-y-1">
+                              <p className="text-[11px] text-muted-foreground">Model</p>
+                              <div className="rounded-md border bg-background/70 px-3 py-2 text-sm">
+                                {AVATAR_TEST_MODEL_LABEL}
                               </div>
-                            ))}
+                            </div>
+                            <div className="space-y-1">
+                              <p className="text-[11px] text-muted-foreground">Quality</p>
+                              <Select
+                                value={avatarQualityPreset}
+                                onValueChange={(v) =>
+                                  setAvatarQualityPreset(v as AvatarQualityPreset)
+                                }
+                              >
+                                <SelectTrigger>
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="fast">Fast</SelectItem>
+                                  <SelectItem value="balanced">Balanced</SelectItem>
+                                  <SelectItem value="high">High</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
                           </div>
-                        </div>
-                      )}
+                          <p className="text-[11px] text-muted-foreground">
+                            {AVATAR_TEST_MODEL_NOTE} This model is not bundled with the app.
+                          </p>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              disabled={
+                                isImageModelReady ||
+                                isImageModelDownloading ||
+                                isImageModelStatusLoading
+                              }
+                              onClick={downloadImageTestModel}
+                            >
+                              {isImageModelDownloading ? (
+                                <>
+                                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                  Downloading...
+                                </>
+                              ) : isImageModelReady ? (
+                                'Model Ready'
+                              ) : (
+                                'Download Model'
+                              )}
+                            </Button>
+                            <a
+                              href={AVATAR_TEST_MODEL_DOWNLOAD_URL}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex text-[11px] text-cyan-400 hover:text-cyan-300 underline underline-offset-4"
+                            >
+                              Direct download link
+                            </a>
+                          </div>
+                          <p className="text-[11px] text-muted-foreground">
+                            {isImageModelStatusLoading
+                              ? 'Checking local model status...'
+                              : isImageModelReady
+                                ? `Model downloaded to ${imageModelStatus?.file_path ?? AVATAR_TEST_MODEL_ID}`
+                                : isImageModelDownloading
+                                  ? `Downloading to ${AVATAR_TEST_MODEL_ID}...`
+                                  : `If you test this feature, the app downloads the model to ${AVATAR_TEST_MODEL_ID}.`}
+                          </p>
+                          <div className="space-y-1">
+                            <p className="text-[11px] text-muted-foreground">Style Preset</p>
+                            <Select value={avatarStylePreset} onValueChange={setAvatarStylePreset}>
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="none">None</SelectItem>
+                                <SelectItem value="chibi">Chibi Portrait</SelectItem>
+                                <SelectItem value="hoodie">Cozy Hoodie</SelectItem>
+                                <SelectItem value="retro_hero">Retro Hero</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <Textarea
+                            value={avatarGeneratePrompt}
+                            onChange={(e) => setAvatarGeneratePrompt(e.target.value)}
+                            placeholder="Describe how the character should look (added to the system style prompt)."
+                            className="min-h-[84px]"
+                          />
+                          <p className="text-[11px] text-muted-foreground">
+                            Keep prompt short (about 5-20 words) for SD1.x models to avoid CLIP
+                            truncation.
+                          </p>
+                          <div className="flex items-center gap-2">
+                            <Input
+                              value={avatarGenerateSeed}
+                              onChange={(e) => setAvatarGenerateSeed(e.target.value)}
+                              placeholder="Seed (optional)"
+                              inputMode="numeric"
+                            />
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              disabled={
+                                !editingProfileId ||
+                                !isImageModelReady ||
+                                isGeneratingAvatarPack ||
+                                isApplyingGeneratedAvatarPack
+                              }
+                              onClick={() =>
+                                editingProfileId && generateIdlePreviewForProfile(editingProfileId)
+                              }
+                            >
+                              {isGeneratingAvatarPack && avatarGenerationStage === 'idle' ? (
+                                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                              ) : (
+                                <Sparkles className="h-4 w-4 mr-2" />
+                              )}
+                              {isGeneratingAvatarPack && avatarGenerationStage === 'idle'
+                                ? 'Generating Idle...'
+                                : 'Generate Idle'}
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              disabled={
+                                !editingProfileId ||
+                                !isImageModelReady ||
+                                !isIdlePreviewReady ||
+                                isGeneratingAvatarPack ||
+                                isApplyingGeneratedAvatarPack
+                              }
+                              onClick={() =>
+                                editingProfileId && generateRestPreviewForProfile(editingProfileId)
+                              }
+                            >
+                              {isGeneratingAvatarPack && avatarGenerationStage === 'rest' ? (
+                                <>
+                                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                  Generating Rest 3...
+                                </>
+                              ) : (
+                                'Generate Rest 3'
+                              )}
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="default"
+                              disabled={
+                                !editingProfileId ||
+                                !hasPendingGeneratedPreview ||
+                                isGeneratingAvatarPack ||
+                                isApplyingGeneratedAvatarPack
+                              }
+                              onClick={() =>
+                                editingProfileId && applyGeneratedAvatarPack(editingProfileId)
+                              }
+                            >
+                              {isApplyingGeneratedAvatarPack ? 'Applying...' : 'Apply'}
+                            </Button>
+                          </div>
+                          {isGeneratingAvatarPack && (
+                            <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              {avatarGenerationStage === 'idle'
+                                ? 'Generating idle preview...'
+                                : 'Generating talk/blink states from idle...'}
+                            </div>
+                          )}
+                          <p className="text-[11px] text-muted-foreground">
+                            Generates at native 512x512 for higher quality and more reliable
+                            expression edits.
+                          </p>
+                          <p className="text-[11px] text-muted-foreground">
+                            Step 1: Generate Idle. Step 2: Generate Rest 3 from idle. Step 3: Apply.
+                          </p>
+                          {!editingProfileId && (
+                            <p className="text-[11px] text-muted-foreground">
+                              Save the profile first to use one-click generation.
+                            </p>
+                          )}
+                          {hasAnyGeneratedPreview && (
+                            <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-2 space-y-2">
+                              <p className="text-xs font-medium">
+                                Generated Preview{' '}
+                                {!hasPendingGeneratedPreview
+                                  ? '(Idle Only / In Progress)'
+                                  : '(Not Applied Yet)'}
+                              </p>
+                              <div className="grid grid-cols-4 gap-2">
+                                {AVATAR_STATE_DEFS.map((def) => (
+                                  <div key={`preview-${def.key}`} className="text-center space-y-1">
+                                    <div
+                                      className="h-16 w-16 mx-auto rounded border overflow-hidden"
+                                      style={{
+                                        backgroundImage:
+                                          'linear-gradient(45deg, #1a1a1a 25%, transparent 25%), linear-gradient(-45deg, #1a1a1a 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #1a1a1a 75%), linear-gradient(-45deg, transparent 75%, #1a1a1a 75%)',
+                                        backgroundSize: '10px 10px',
+                                        backgroundPosition: '0 0, 0 5px, 5px -5px, -5px 0px',
+                                        backgroundColor: '#111',
+                                      }}
+                                    >
+                                      {generatedStatePreviews[def.key] ? (
+                                        <img
+                                          src={generatedStatePreviews[def.key] ?? undefined}
+                                          alt={`${def.label} preview`}
+                                          className="h-full w-full object-contain"
+                                        />
+                                      ) : (
+                                        <div className="h-full w-full flex items-center justify-center text-[9px] text-muted-foreground">
+                                          No preview
+                                        </div>
+                                      )}
+                                    </div>
+                                    <p className="text-[10px] text-muted-foreground">{def.key}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
                         </>
                       )}
                     </div>
                     <div className="order-1 grid grid-cols-1 md:grid-cols-2 gap-3">
                       {AVATAR_STATE_DEFS.map((def) => (
-                        <div key={def.key} className="rounded-md border bg-background/60 p-2 space-y-2">
+                        <div
+                          key={def.key}
+                          className="rounded-md border bg-background/60 p-2 space-y-2"
+                        >
                           <div className="text-xs">
                             <p className="font-medium leading-tight">{def.label}</p>
                             <p className="text-muted-foreground">{def.helper}</p>
@@ -1755,59 +1926,6 @@ export function ProfileForm() {
                           : 'No saved 4-state pack for this profile yet.'}
                     </p>
                   </div>
-
-                  <FormField
-                    control={form.control}
-                    name="name"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Name</FormLabel>
-                        <FormControl>
-                          <Input placeholder="My Voice" {...field} />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-
-                  <FormField
-                    control={form.control}
-                    name="description"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Description (Optional)</FormLabel>
-                        <FormControl>
-                          <Textarea placeholder="Describe this voice..." {...field} />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-
-                  <FormField
-                    control={form.control}
-                    name="language"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Language</FormLabel>
-                        <Select onValueChange={field.onChange} defaultValue={field.value}>
-                          <FormControl>
-                            <SelectTrigger>
-                              <SelectValue />
-                            </SelectTrigger>
-                          </FormControl>
-                          <SelectContent>
-                            {LANGUAGE_OPTIONS.map((lang) => (
-                              <SelectItem key={lang.value} value={lang.value}>
-                                {lang.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
                 </div>
               </div>
 

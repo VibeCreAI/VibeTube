@@ -1,4 +1,4 @@
-import type { LanguageCode } from '@/lib/constants/languages';
+import type { TranscriptionLanguageCode } from '@/lib/constants/languages';
 import { useServerStore } from '@/stores/serverStore';
 import type {
   ActiveTasksResponse,
@@ -315,10 +315,13 @@ class ApiClient {
   }
 
   // Transcription
-  async transcribeAudio(file: File, language?: LanguageCode): Promise<TranscriptionResponse> {
+  async transcribeAudio(
+    file: File,
+    language?: TranscriptionLanguageCode,
+  ): Promise<TranscriptionResponse> {
     const formData = new FormData();
     formData.append('file', file);
-    if (language) {
+    if (language && language !== 'auto') {
       formData.append('language', language);
     }
 

@@ -1,11 +1,11 @@
-﻿// Prevents additional console window on Windows in release, DO NOT REMOVE!!
+// Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod audio_capture;
 mod audio_output;
 
 use std::sync::Mutex;
-use tauri::{command, State, Manager, WindowEvent, Emitter, Listener, RunEvent};
+use tauri::{command, Emitter, Listener, Manager, RunEvent, State, WindowEvent};
 use tauri_plugin_shell::ShellExt;
 use tokio::sync::mpsc;
 
@@ -46,7 +46,10 @@ async fn start_server(
                     let pid_str = parts[1];
                     if command.contains("vibetube") {
                         if let Ok(pid) = pid_str.parse::<u32>() {
-                            println!("Found existing vibetube-server on port {} (PID: {}), reusing it", SERVER_PORT, pid);
+                            println!(
+                                "Found existing vibetube-server on port {} (PID: {}), reusing it",
+                                SERVER_PORT, pid
+                            );
                             track_server_process(&state, pid);
                             return Ok(format!("http://127.0.0.1:{}", SERVER_PORT));
                         }
@@ -55,14 +58,11 @@ async fn start_server(
             }
         }
     }
-    
+
     #[cfg(windows)]
     {
         use std::process::Command;
-        if let Ok(output) = Command::new("netstat")
-            .args(["-ano"])
-            .output()
-        {
+        if let Ok(output) = Command::new("netstat").args(["-ano"]).output() {
             let output_str = String::from_utf8_lossy(&output.stdout);
             for line in output_str.lines() {
                 if line.contains(&format!(":{}", SERVER_PORT)) && line.contains("LISTENING") {
@@ -97,13 +97,14 @@ async fn start_server(
             .output()
         {
             let output_str = String::from_utf8_lossy(&output.stdout);
-            for line in output_str.lines().skip(1) { // Skip header line
+            for line in output_str.lines().skip(1) {
+                // Skip header line
                 // lsof output format: COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME
                 let parts: Vec<&str> = line.split_whitespace().collect();
                 if parts.len() >= 2 {
                     let command = parts[0];
                     let pid_str = parts[1];
-                    
+
                     // Only kill if it's a vibetube-server process
                     if command.contains("vibetube") {
                         if let Ok(pid) = pid_str.parse::<i32>() {
@@ -112,9 +113,7 @@ async fn start_server(
                             let _ = Command::new("kill")
                                 .args(["-9", "--", &format!("-{}", pid)])
                                 .output();
-                            let _ = Command::new("kill")
-                                .args(["-9", &pid.to_string()])
-                                .output();
+                            let _ = Command::new("kill").args(["-9", &pid.to_string()]).output();
                         }
                     } else {
                         println!("Legacy port {} is in use by non-vibetube process: {} (PID: {}), not killing", LEGACY_PORT, command, pid_str);
@@ -123,15 +122,12 @@ async fn start_server(
             }
         }
     }
-    
+
     #[cfg(windows)]
     {
         use std::process::Command;
         // On Windows, find PIDs on legacy port 8000, then check their names
-        if let Ok(output) = Command::new("netstat")
-            .args(["-ano"])
-            .output()
-        {
+        if let Ok(output) = Command::new("netstat").args(["-ano"]).output() {
             let output_str = String::from_utf8_lossy(&output.stdout);
             for line in output_str.lines() {
                 if line.contains(&format!(":{}", LEGACY_PORT)) && line.contains("LISTENING") {
@@ -158,7 +154,7 @@ async fn start_server(
             }
         }
     }
-    
+
     // Brief wait for port to be released
     std::thread::sleep(std::time::Duration::from_millis(200));
 
@@ -169,8 +165,7 @@ async fn start_server(
         .map_err(|e| format!("Failed to get app data dir: {}", e))?;
 
     // Ensure data directory exists
-    std::fs::create_dir_all(&data_dir)
-        .map_err(|e| format!("Failed to create data dir: {}", e))?;
+    std::fs::create_dir_all(&data_dir).map_err(|e| format!("Failed to create data dir: {}", e))?;
 
     println!("=================================================================");
     println!("Starting vibetube-server sidecar");
@@ -187,14 +182,19 @@ async fn start_server(
             // In dev mode, check if the server is already running (started manually)
             #[cfg(debug_assertions)]
             {
-                eprintln!("Dev mode: Checking if server is already running on port {}...", SERVER_PORT);
+                eprintln!(
+                    "Dev mode: Checking if server is already running on port {}...",
+                    SERVER_PORT
+                );
 
                 // Try to connect to the server port
                 use std::net::TcpStream;
                 if TcpStream::connect_timeout(
                     &format!("127.0.0.1:{}", SERVER_PORT).parse().unwrap(),
                     std::time::Duration::from_secs(1),
-                ).is_ok() {
+                )
+                .is_ok()
+                {
                     println!("Found server already running on port {}", SERVER_PORT);
                     return Ok(format!("http://127.0.0.1:{}", SERVER_PORT));
                 }
@@ -244,7 +244,9 @@ async fn start_server(
                 if TcpStream::connect_timeout(
                     &format!("127.0.0.1:{}", SERVER_PORT).parse().unwrap(),
                     std::time::Duration::from_secs(1),
-                ).is_ok() {
+                )
+                .is_ok()
+                {
                     println!("Found manually-started server on port {}", SERVER_PORT);
                     return Ok(format!("http://127.0.0.1:{}", SERVER_PORT));
                 }
@@ -303,7 +305,9 @@ async fn start_server(
                 if TcpStream::connect_timeout(
                     &format!("127.0.0.1:{}", SERVER_PORT).parse().unwrap(),
                     std::time::Duration::from_secs(1),
-                ).is_ok() {
+                )
+                .is_ok()
+                {
                     // Kill the placeholder process
                     let _ = state.child.lock().unwrap().take();
                     println!("Found manually-started server on port {}", SERVER_PORT);
@@ -321,7 +325,9 @@ async fn start_server(
                         let line_str = String::from_utf8_lossy(&line);
                         println!("Server output: {}", line_str);
 
-                        if line_str.contains("Uvicorn running") || line_str.contains("Application startup complete") {
+                        if line_str.contains("Uvicorn running")
+                            || line_str.contains("Application startup complete")
+                        {
                             println!("Server is ready!");
                             break;
                         }
@@ -331,12 +337,17 @@ async fn start_server(
                         eprintln!("Server: {}", line_str);
 
                         // Collect error lines for debugging
-                        if line_str.contains("ERROR") || line_str.contains("Error") || line_str.contains("Failed") {
+                        if line_str.contains("ERROR")
+                            || line_str.contains("Error")
+                            || line_str.contains("Failed")
+                        {
                             error_output.push(line_str.clone());
                         }
 
                         // Uvicorn logs to stderr, so check there too
-                        if line_str.contains("Uvicorn running") || line_str.contains("Application startup complete") {
+                        if line_str.contains("Uvicorn running")
+                            || line_str.contains("Application startup complete")
+                        {
                             println!("Server is ready!");
                             break;
                         }
@@ -355,7 +366,9 @@ async fn start_server(
                     if TcpStream::connect_timeout(
                         &format!("127.0.0.1:{}", SERVER_PORT).parse().unwrap(),
                         std::time::Duration::from_secs(1),
-                    ).is_ok() {
+                    )
+                    .is_ok()
+                    {
                         // Clean up state
                         let _ = state.child.lock().unwrap().take();
                         let _ = state.server_pid.lock().unwrap().take();
@@ -371,7 +384,9 @@ async fn start_server(
                     eprintln!("  bun run dev:server");
                     eprintln!("=================================================================");
                     eprintln!("");
-                    return Err("Dev mode: Start server manually with 'bun run dev:server'".to_string());
+                    return Err(
+                        "Dev mode: Start server manually with 'bun run dev:server'".to_string()
+                    );
                 }
 
                 #[cfg(not(debug_assertions))]
@@ -435,8 +450,8 @@ fn close_windows_job_handle(raw_handle: isize) {
 fn create_windows_job_for_pid(pid: u32) -> Result<isize, String> {
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject,
-        JobObjectExtendedLimitInformation, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     };
     use windows::Win32::System::Threading::{
@@ -510,7 +525,10 @@ fn track_server_process(state: &ServerState, pid: u32) {
                 replace_windows_job_handle(state, Some(job_handle));
             }
             Err(error) => {
-                eprintln!("Failed to assign vibetube-server PID {} to job object: {}", pid, error);
+                eprintln!(
+                    "Failed to assign vibetube-server PID {} to job object: {}",
+                    pid, error
+                );
                 replace_windows_job_handle(state, None);
             }
         }
@@ -521,7 +539,13 @@ fn track_server_process(state: &ServerState, pid: u32) {
 fn list_windows_process_ids_by_image(image_name: &str) -> Vec<u32> {
     use std::process::Command;
     let Ok(output) = Command::new("tasklist")
-        .args(["/FI", &format!("IMAGENAME eq {}", image_name), "/FO", "CSV", "/NH"])
+        .args([
+            "/FI",
+            &format!("IMAGENAME eq {}", image_name),
+            "/FO",
+            "CSV",
+            "/NH",
+        ])
         .output()
     else {
         return Vec::new();
@@ -723,9 +747,7 @@ fn shutdown_server_processes(state: &ServerState) -> Result<(), String> {
             let _ = Command::new("kill")
                 .args(["-9", "--", &format!("-{}", pid)])
                 .output();
-            let _ = Command::new("kill")
-                .args(["-9", &pid.to_string()])
-                .output();
+            let _ = Command::new("kill").args(["-9", &pid.to_string()]).output();
 
             println!("Server process group kill completed");
         } else {
@@ -793,9 +815,7 @@ async fn play_audio_to_devices(
 }
 
 #[command]
-fn stop_audio_playback(
-    state: State<'_, audio_output::AudioOutputState>,
-) -> Result<(), String> {
+fn stop_audio_playback(state: State<'_, audio_output::AudioOutputState>) -> Result<(), String> {
     state.stop_all_playback()
 }
 
@@ -816,7 +836,8 @@ pub fn run() {
         .setup(|app| {
             #[cfg(desktop)]
             {
-                app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
+                app.handle()
+                    .plugin(tauri_plugin_updater::Builder::new().build())?;
                 app.handle().plugin(tauri_plugin_process::init())?;
             }
 
@@ -824,8 +845,10 @@ pub fn run() {
             #[cfg(windows)]
             {
                 use windows::Win32::Foundation::HWND;
-                use windows::Win32::UI::WindowsAndMessaging::{SetClassLongPtrW, GCLP_HICON, GCLP_HICONSM};
-                
+                use windows::Win32::UI::WindowsAndMessaging::{
+                    SetClassLongPtrW, GCLP_HICON, GCLP_HICONSM,
+                };
+
                 if let Some((_, window)) = app.webview_windows().iter().next() {
                     if let Ok(hwnd) = window.hwnd() {
                         let hwnd = HWND(hwnd.0);
@@ -905,7 +928,7 @@ pub fn run() {
                     let state = app.state::<ServerState>();
                     let keep_running = *state.keep_running_on_close.lock().unwrap();
                     println!("keep_running_on_close = {}", keep_running);
-                    
+
                     if !keep_running {
                         if let Err(error) = shutdown_server_processes(&state) {
                             eprintln!("Failed to stop server during app exit: {}", error);
@@ -928,4 +951,3 @@ pub fn run() {
 fn main() {
     run();
 }
-

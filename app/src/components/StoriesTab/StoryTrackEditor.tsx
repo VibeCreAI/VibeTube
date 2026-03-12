@@ -834,38 +834,59 @@ export function StoryTrackEditor({ storyId, items }: StoryTrackEditorProps) {
             </div>
           )}
 
-          {/* Zoom controls - right side */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground">Channels:</span>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6"
-              onClick={() => setDefaultTrackCount((prev) => Math.max(1, prev - 1))}
-              disabled={defaultTrackCount <= 1}
-              title="Remove empty default channel"
-            >
-              <Minus className="h-3 w-3" />
-            </Button>
-            <span className="text-xs text-muted-foreground tabular-nums w-4 text-center">
-              {defaultTrackCount}
-            </span>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6"
-              onClick={() => setDefaultTrackCount((prev) => prev + 1)}
-              title="Add channel"
-            >
-              <Plus className="h-3 w-3" />
-            </Button>
-            <span className="text-xs text-muted-foreground">Zoom:</span>
-            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={handleZoomOut}>
-              <Minus className="h-3 w-3" />
-            </Button>
-            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={handleZoomIn}>
-              <Plus className="h-3 w-3" />
-            </Button>
+          {/* Timeline controls - right side */}
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-1 rounded-full border bg-card/70 px-2 py-1">
+              <span className="px-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                Tracks
+              </span>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 rounded-full"
+                onClick={() => setDefaultTrackCount((prev) => Math.max(1, prev - 1))}
+                disabled={defaultTrackCount <= 1}
+                title="Remove empty default channel"
+              >
+                <Minus className="h-3 w-3" />
+              </Button>
+              <span className="w-5 text-center text-xs font-medium tabular-nums text-foreground">
+                {defaultTrackCount}
+              </span>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 rounded-full"
+                onClick={() => setDefaultTrackCount((prev) => prev + 1)}
+                title="Add channel"
+              >
+                <Plus className="h-3 w-3" />
+              </Button>
+            </div>
+
+            <div className="flex items-center gap-1 rounded-full border bg-card/70 px-2 py-1">
+              <span className="px-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                Zoom
+              </span>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 rounded-full"
+                onClick={handleZoomOut}
+                title="Zoom out"
+              >
+                <Minus className="h-3 w-3" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 rounded-full"
+                onClick={handleZoomIn}
+                title="Zoom in"
+              >
+                <Plus className="h-3 w-3" />
+              </Button>
+            </div>
           </div>
         </div>
 

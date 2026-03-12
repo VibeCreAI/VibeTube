@@ -13,7 +13,7 @@ interface SidebarProps {
 const tabs = [
   { id: 'main', path: '/', icon: Clapperboard, label: 'Generate' },
   { id: 'stories', path: '/stories', icon: BookOpen, label: 'Stories' },
-  { id: 'characters', path: '/characters', icon: UserRound, label: 'Characters' },
+  { id: 'characters', path: '/characters', icon: UserRound, label: 'Profiles' },
   { id: 'settings', path: '/settings', icon: Settings, label: 'Settings' },
 ];
 

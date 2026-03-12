@@ -209,7 +209,7 @@ Transcribe audio file to text.
 
 **Form Data:**
 - `file`: Audio file
-- `language` (optional): Language hint (en or zh)
+- `language` (optional): Language hint such as `en`, `ko`, `ja`, `fr`, or `es`
 
 **Response:**
 ```json
@@ -236,7 +236,7 @@ Unload TTS model to free memory.
 - `id`: UUID primary key
 - `name`: Profile name (unique)
 - `description`: Optional description
-- `language`: Language code (en/zh)
+- `language`: Language code (`zh`, `en`, `ja`, `ko`, `de`, `fr`, `ru`, `pt`, `es`, `it`)
 - `created_at`: Creation timestamp
 - `updated_at`: Last update timestamp
 

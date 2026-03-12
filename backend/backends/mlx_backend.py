@@ -300,7 +300,7 @@ class MLXTTSBackend:
         Args:
             text: Text to synthesize
             voice_prompt: Voice prompt dictionary with ref_audio and ref_text
-            language: Language code (en or zh) - may not be fully supported by MLX
+            language: Language code supported by the app (en, zh, ja, ko, de, fr, ru, pt, es, it)
             seed: Random seed for reproducibility
             instruct: Natural language instruction (may not be supported by MLX)
 
@@ -345,23 +345,27 @@ class MLXTTSBackend:
                     if "ref_audio" in sig.parameters:
                         # Generate with voice cloning
                         for result in self.model.generate(text, ref_audio=ref_audio, ref_text=ref_text):
-                            audio_chunks.append(np.array(result.audio))
+                            chunk = np.asarray(result.audio, dtype=np.float32)
+                            audio_chunks.append(chunk)
                             sample_rate = result.sample_rate
                     else:
                         # Fallback: generate without voice cloning
                         for result in self.model.generate(text):
-                            audio_chunks.append(np.array(result.audio))
+                            chunk = np.asarray(result.audio, dtype=np.float32)
+                            audio_chunks.append(chunk)
                             sample_rate = result.sample_rate
                 else:
                     # No voice prompt, generate normally
                     for result in self.model.generate(text):
-                        audio_chunks.append(np.array(result.audio))
+                        chunk = np.asarray(result.audio, dtype=np.float32)
+                        audio_chunks.append(chunk)
                         sample_rate = result.sample_rate
             except Exception as e:
                 # If voice cloning fails, try without it
                 print(f"Warning: Voice cloning failed, generating without voice prompt: {e}")
                 for result in self.model.generate(text):
-                    audio_chunks.append(np.array(result.audio))
+                    chunk = np.asarray(result.audio, dtype=np.float32)
+                    audio_chunks.append(chunk)
                     sample_rate = result.sample_rate
             
             # Concatenate all chunks
@@ -542,7 +546,7 @@ class MLXSTTBackend:
 
         Args:
             audio_path: Path to audio file
-            language: Optional language hint (en or zh)
+            language: Optional language hint such as en, ko, or ja
 
         Returns:
             Transcribed text
@@ -553,7 +557,7 @@ class MLXSTTBackend:
             """Run synchronous transcription in thread pool."""
             # MLX Whisper transcription using generate method
             # The generate method accepts audio path directly
-            decode_options = {}
+            decode_options = {"task": "transcribe"}
             if language:
                 decode_options["language"] = language
 

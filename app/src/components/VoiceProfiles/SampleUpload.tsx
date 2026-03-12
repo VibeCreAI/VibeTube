@@ -23,9 +23,11 @@ import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
+import type { LanguageCode, TranscriptionLanguageCode } from '@/lib/constants/languages';
+import { getVoiceSampleScript, type RecordingPromptMode } from '@/lib/constants/voiceSampleScripts';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
-import { useAudioRecording } from '@/lib/hooks/useAudioRecording';
 import type { AudioProcessingOptions } from '@/lib/hooks/useAudioRecording';
+import { useAudioRecording } from '@/lib/hooks/useAudioRecording';
 import { useAddSample, useProfile } from '@/lib/hooks/useProfiles';
 import { useSystemAudioCapture } from '@/lib/hooks/useSystemAudioCapture';
 import { useTranscription } from '@/lib/hooks/useTranscription';
@@ -34,6 +36,8 @@ import { usePlatform } from '@/platform/PlatformContext';
 import { AudioSampleRecording } from './AudioSampleRecording';
 import { AudioSampleSystem } from './AudioSampleSystem';
 import { AudioSampleUpload } from './AudioSampleUpload';
+import { RecordingPromptField } from './RecordingPromptField';
+import { TranscriptionLanguageField } from './TranscriptionLanguageField';
 
 const sampleSchema = z.object({
   file: z.instanceof(File, { message: 'Please select an audio file' }),
@@ -58,6 +62,9 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
   const { data: profile } = useProfile(profileId);
   const { toast } = useToast();
   const [mode, setMode] = useState<'upload' | 'record' | 'system'>('upload');
+  const [transcriptionLanguage, setTranscriptionLanguage] =
+    useState<TranscriptionLanguageCode>('auto');
+  const [recordingPromptMode, setRecordingPromptMode] = useState<RecordingPromptMode>('script');
   const [recordGainDb, setRecordGainDb] = useState(0);
   const [audioProcessing, setAudioProcessing] = useState<AudioProcessingOptions>({
     autoGainControl: true,
@@ -74,6 +81,8 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
   });
 
   const selectedFile = form.watch('file');
+  const recordingLanguage = (profile?.language as LanguageCode) || 'en';
+  const shouldShowTranscriptionControls = mode !== 'record' || recordingPromptMode === 'custom';
 
   const {
     isRecording,
@@ -151,6 +160,17 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
     }
   }, [systemRecordingError, toast]);
 
+  useEffect(() => {
+    if (mode !== 'record' || recordingPromptMode !== 'script') {
+      return;
+    }
+
+    form.setValue('referenceText', getVoiceSampleScript(recordingLanguage), {
+      shouldValidate: true,
+    });
+    form.clearErrors('referenceText');
+  }, [form, mode, recordingLanguage, recordingPromptMode]);
+
   async function handleTranscribe() {
     const file = form.getValues('file');
     if (!file) {
@@ -163,8 +183,7 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
     }
 
     try {
-      const language = profile?.language as 'en' | 'zh' | undefined;
-      const result = await transcribe.mutateAsync({ file, language });
+      const result = await transcribe.mutateAsync({ file, language: transcriptionLanguage });
 
       form.setValue('referenceText', result.text, { shouldValidate: true });
     } catch (error) {
@@ -208,6 +227,8 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
     if (!newOpen) {
       form.reset();
       setMode('upload');
+      setTranscriptionLanguage('auto');
+      setRecordingPromptMode('script');
       setRecordGainDb(0);
       if (isRecording) {
         cancelRecording();
@@ -286,6 +307,11 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
               </TabsContent>
 
               <TabsContent value="record" className="space-y-4">
+                <RecordingPromptField
+                  language={recordingLanguage}
+                  mode={recordingPromptMode}
+                  onModeChange={setRecordingPromptMode}
+                />
                 <FormField
                   control={form.control}
                   name="file"
@@ -303,6 +329,7 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
                       onPlayPause={handlePlayPause}
                       isPlaying={isPlaying}
                       isTranscribing={transcribe.isPending}
+                      showTranscribeButton={recordingPromptMode === 'custom'}
                     />
                   )}
                 />
@@ -356,6 +383,19 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
               )}
             </Tabs>
 
+            {shouldShowTranscriptionControls ? (
+              <TranscriptionLanguageField
+                value={transcriptionLanguage}
+                onChange={setTranscriptionLanguage}
+                disabled={transcribe.isPending}
+              />
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Sample script mode fills the reference text automatically, so transcription is not
+                needed.
+              </p>
+            )}
+
             <FormField
               control={form.control}
               name="referenceText"
@@ -366,6 +406,7 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
                     <Textarea
                       placeholder="Enter the exact text spoken in the audio..."
                       className="min-h-[100px]"
+                      readOnly={mode === 'record' && recordingPromptMode === 'script'}
                       {...field}
                     />
                   </FormControl>

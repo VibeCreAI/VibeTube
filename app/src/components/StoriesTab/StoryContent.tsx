@@ -206,6 +206,20 @@ export function StoryContent() {
     }
   }, [profiles, selectedProfileId]);
 
+  useEffect(() => {
+    if (!selectedProfileId || !profiles) {
+      return;
+    }
+    const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId);
+    if (!selectedProfile?.language) {
+      return;
+    }
+    generateForm.setValue('language', selectedProfile.language as (typeof LANGUAGE_OPTIONS)[number]['value'], {
+      shouldDirty: true,
+      shouldValidate: true,
+    });
+  }, [generateForm, profiles, selectedProfileId]);
+
   // Use playback hook
   useStoryPlayback(story?.items);
 

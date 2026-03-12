@@ -1,4 +1,5 @@
 import { Loader2, Mic } from 'lucide-react';
+import { useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -29,6 +30,16 @@ export function GenerationForm() {
   const { data: selectedProfile } = useProfile(selectedProfileId || '');
 
   const { form, handleSubmit, isPending, statusMessage } = useGenerationForm();
+
+  useEffect(() => {
+    if (!selectedProfile?.language) {
+      return;
+    }
+    form.setValue('language', selectedProfile.language, {
+      shouldDirty: true,
+      shouldValidate: true,
+    });
+  }, [form, selectedProfile?.id, selectedProfile?.language]);
 
   async function onSubmit(data: Parameters<typeof handleSubmit>[0]) {
     await handleSubmit(data, selectedProfileId);
@@ -105,7 +116,7 @@ export function GenerationForm() {
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Language</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value}>
+                    <Select value={field.value} onValueChange={field.onChange}>
                       <FormControl>
                         <SelectTrigger>
                           <SelectValue />
@@ -130,7 +141,7 @@ export function GenerationForm() {
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Model Size</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value}>
+                    <Select value={field.value} onValueChange={field.onChange}>
                       <FormControl>
                         <SelectTrigger>
                           <SelectValue />
