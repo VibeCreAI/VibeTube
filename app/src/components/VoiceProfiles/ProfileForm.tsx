@@ -43,6 +43,11 @@ import { useToast } from '@/components/ui/use-toast';
 import { apiClient } from '@/lib/api/client';
 import type { ImageModelStatusResponse } from '@/lib/api/types';
 import {
+  AVATAR_PRESET_OPTIONS,
+  loadAvatarPresetFiles,
+  type AvatarPresetStateKey,
+} from '@/lib/constants/avatarPresets';
+import {
   LANGUAGE_CODES,
   LANGUAGE_OPTIONS,
   type LanguageCode,
@@ -104,7 +109,7 @@ const profileSchema = baseProfileSchema.refine(
 );
 
 type ProfileFormValues = z.infer<typeof profileSchema>;
-type AvatarStateKey = 'idle' | 'talk' | 'idle_blink' | 'talk_blink';
+type AvatarStateKey = AvatarPresetStateKey;
 type AvatarStateFiles = Record<AvatarStateKey, File | null>;
 type AvatarStatePreviews = Record<AvatarStateKey, string | null>;
 type AvatarQualityPreset = 'fast' | 'balanced' | 'high';
@@ -209,6 +214,8 @@ export function ProfileForm() {
   const [audioDuration, setAudioDuration] = useState<number | null>(null);
   const [isValidatingAudio, setIsValidatingAudio] = useState(false);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
+  const [selectedAvatarPresetId, setSelectedAvatarPresetId] = useState<string | null>(null);
+  const [isApplyingAvatarPreset, setIsApplyingAvatarPreset] = useState(false);
   const [avatarStateFiles, setAvatarStateFiles] = useState<AvatarStateFiles>({
     idle: null,
     talk: null,
@@ -263,6 +270,9 @@ export function ProfileForm() {
   const selectedFile = form.watch('sampleFile');
   const selectedAvatarFile = form.watch('avatarFile');
   const selectedLanguage = form.watch('language');
+  const selectedAvatarPreset = selectedAvatarPresetId
+    ? AVATAR_PRESET_OPTIONS.find((preset) => preset.id === selectedAvatarPresetId) ?? null
+    : null;
   const parsedAvatarSeed = avatarGenerateSeed.trim() ? Number(avatarGenerateSeed) : undefined;
   const hasAnyGeneratedPreview = Object.values(generatedStatePreviews).some(Boolean);
   const isImageModelReady = Boolean(imageModelStatus?.downloaded);
@@ -414,6 +424,63 @@ export function ProfileForm() {
     });
   };
 
+  const setAvatarPresetFiles = (files: Record<AvatarStateKey, File>) => {
+    (Object.entries(files) as Array<[AvatarStateKey, File]>).forEach(([key, file]) => {
+      setAvatarStateFile(key, file);
+    });
+  };
+
+  function clearPresetLoadedImages() {
+    setSelectedAvatarPresetId(null);
+    setAvatarStateFiles({
+      idle: null,
+      talk: null,
+      idle_blink: null,
+      talk_blink: null,
+    });
+    setAvatarStatePreviews({
+      idle: null,
+      talk: null,
+      idle_blink: null,
+      talk_blink: null,
+    });
+    form.setValue('avatarFile', undefined, { shouldValidate: true });
+    if (avatarInputRef.current) {
+      avatarInputRef.current.value = '';
+    }
+  }
+
+  async function handleApplyAvatarPreset(presetId: string) {
+    const preset = AVATAR_PRESET_OPTIONS.find((option) => option.id === presetId);
+    if (!preset) {
+      return;
+    }
+
+    setIsApplyingAvatarPreset(true);
+    try {
+      const presetFiles = await loadAvatarPresetFiles(preset);
+      form.setValue('avatarFile', presetFiles.idle, { shouldValidate: true });
+      setAvatarPresetFiles(presetFiles);
+      setSelectedAvatarPresetId(preset.id);
+      if (avatarInputRef.current) {
+        avatarInputRef.current.value = '';
+      }
+      toast({
+        title: 'Avatar preset applied',
+        description: `${preset.name} is now loaded for the profile avatar and all 4 VibeTube states.`,
+      });
+    } catch (error) {
+      toast({
+        title: 'Preset load failed',
+        description:
+          error instanceof Error ? error.message : 'Failed to load the bundled avatar preset.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsApplyingAvatarPreset(false);
+    }
+  }
+
   useEffect(() => {
     return () => {
       Object.values(avatarStatePreviews).forEach((url) => {
@@ -437,6 +504,7 @@ export function ProfileForm() {
       });
       setTranscriptionLanguage('auto');
       setRecordingPromptMode('script');
+      setSelectedAvatarPresetId(null);
     } else if (profileFormDraft && open) {
       // Restore from draft when opening in create mode
       form.reset({
@@ -450,6 +518,7 @@ export function ProfileForm() {
       setSampleMode(profileFormDraft.sampleMode);
       setTranscriptionLanguage(profileFormDraft.transcriptionLanguage || 'auto');
       setRecordingPromptMode(profileFormDraft.recordingPromptMode || 'script');
+      setSelectedAvatarPresetId(null);
       // Restore the file if we have it saved
       if (
         profileFormDraft.sampleFileData &&
@@ -485,6 +554,7 @@ export function ProfileForm() {
       setAvatarQualityPreset('balanced');
       setHasPendingGeneratedPreview(false);
       setIsIdlePreviewReady(false);
+      setSelectedAvatarPresetId(null);
       setGeneratedStatePreviews({
         idle: null,
         talk: null,
@@ -700,6 +770,7 @@ export function ProfileForm() {
         });
         return;
       }
+      setSelectedAvatarPresetId(null);
       form.setValue('avatarFile', file);
     }
   }
@@ -720,6 +791,7 @@ export function ProfileForm() {
         });
       }
     }
+    setSelectedAvatarPresetId(null);
     form.setValue('avatarFile', undefined);
     setAvatarPreview(null);
     if (avatarInputRef.current) {
@@ -1517,44 +1589,46 @@ export function ProfileForm() {
                     render={() => (
                       <FormItem>
                         <FormControl>
-                          <div className="flex justify-center pt-4 pb-2">
-                            <div className="relative group">
-                              <div className="h-24 w-24 rounded-full bg-muted flex items-center justify-center shrink-0 overflow-hidden border-2 border-border">
-                                {avatarPreview ? (
-                                  <img
-                                    src={avatarPreview}
-                                    alt="Avatar preview"
-                                    className="h-full w-full object-cover"
-                                  />
-                                ) : (
-                                  <UserRound className="h-10 w-10 text-muted-foreground" />
-                                )}
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => avatarInputRef.current?.click()}
-                                className="absolute inset-0 rounded-full bg-accent/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer"
-                              >
-                                <Edit2 className="h-6 w-6 text-accent-foreground" />
-                              </button>
-                              {(avatarPreview || editingProfile?.avatar_path) && (
+                          <div className="pt-4 pb-2">
+                            <div className="flex justify-center">
+                              <div className="relative group">
+                                <div className="h-24 w-24 rounded-full bg-muted flex items-center justify-center shrink-0 overflow-hidden border-2 border-border">
+                                  {avatarPreview ? (
+                                    <img
+                                      src={avatarPreview}
+                                      alt="Avatar preview"
+                                      className="h-full w-full object-cover"
+                                    />
+                                  ) : (
+                                    <UserRound className="h-10 w-10 text-muted-foreground" />
+                                  )}
+                                </div>
                                 <button
                                   type="button"
-                                  onClick={handleRemoveAvatar}
-                                  disabled={deleteAvatar.isPending}
-                                  className="absolute bottom-0 right-0 h-6 w-6 rounded-full bg-background/60 backdrop-blur-sm text-muted-foreground flex items-center justify-center hover:bg-background/80 hover:text-foreground transition-colors shadow-sm border border-border/50"
+                                  onClick={() => avatarInputRef.current?.click()}
+                                  className="absolute inset-0 rounded-full bg-accent/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer"
                                 >
-                                  <X className="h-3.5 w-3.5" />
+                                  <Edit2 className="h-6 w-6 text-accent-foreground" />
                                 </button>
-                              )}
+                                {(avatarPreview || editingProfile?.avatar_path) && (
+                                  <button
+                                    type="button"
+                                    onClick={handleRemoveAvatar}
+                                    disabled={deleteAvatar.isPending}
+                                    className="absolute bottom-0 right-0 h-6 w-6 rounded-full bg-background/60 backdrop-blur-sm text-muted-foreground flex items-center justify-center hover:bg-background/80 hover:text-foreground transition-colors shadow-sm border border-border/50"
+                                  >
+                                    <X className="h-3.5 w-3.5" />
+                                  </button>
+                                )}
+                              </div>
+                              <input
+                                ref={avatarInputRef}
+                                type="file"
+                                accept="image/png,image/jpeg,image/webp"
+                                onChange={handleAvatarFileChange}
+                                className="hidden"
+                              />
                             </div>
-                            <input
-                              ref={avatarInputRef}
-                              type="file"
-                              accept="image/png,image/jpeg,image/webp"
-                              onChange={handleAvatarFileChange}
-                              className="hidden"
-                            />
                           </div>
                         </FormControl>
                         <FormMessage />
@@ -1620,6 +1694,61 @@ export function ProfileForm() {
                       <p className="text-sm font-medium">VibeTube Avatar State Images</p>
                       <p className="text-xs text-muted-foreground">
                         Upload 4 PNGs, or auto-generate states from a character prompt.
+                      </p>
+                    </div>
+                    <div className="rounded-md border bg-background/60 p-3 space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-xs font-medium">Sample Avatar Presets</p>
+                        {isApplyingAvatarPreset && (
+                          <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                            Applying...
+                          </div>
+                        )}
+                      </div>
+                      <Select
+                        value={selectedAvatarPresetId ?? 'none'}
+                        onValueChange={(value) => {
+                          if (value === 'none') {
+                            clearPresetLoadedImages();
+                            return;
+                          }
+                          handleApplyAvatarPreset(value);
+                        }}
+                        disabled={isApplyingAvatarPreset}
+                      >
+                        <SelectTrigger>
+                          {selectedAvatarPreset ? (
+                            <div className="flex items-center gap-2">
+                              <img
+                                src={selectedAvatarPreset.avatarUrl}
+                                alt={`${selectedAvatarPreset.name} idle preview`}
+                                className="h-6 w-6 rounded object-cover border"
+                              />
+                              <span>{selectedAvatarPreset.name}</span>
+                            </div>
+                          ) : (
+                            <span className="text-muted-foreground">None</span>
+                          )}
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">None</SelectItem>
+                          {AVATAR_PRESET_OPTIONS.map((preset) => (
+                            <SelectItem key={preset.id} value={preset.id}>
+                              <div className="flex items-center gap-2">
+                                <img
+                                  src={preset.avatarUrl}
+                                  alt={`${preset.name} idle preview`}
+                                  className="h-6 w-6 rounded object-cover border"
+                                />
+                                <span>{preset.name}</span>
+                              </div>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-[11px] text-muted-foreground">
+                        Selecting a preset loads the round avatar and all 4 VibeTube state images.
                       </p>
                     </div>
                     <div className="order-3 rounded-md border bg-background/60 p-3 space-y-2">
@@ -1879,6 +2008,7 @@ export function ProfileForm() {
                             accept="image/png"
                             onChange={(e) => {
                               const file = e.target.files?.[0] ?? null;
+                              setSelectedAvatarPresetId(null);
                               if (!file) {
                                 setAvatarStateFile(def.key, null);
                                 return;
