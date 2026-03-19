@@ -38,6 +38,7 @@ import type {
   VibeTubeExportFormat,
   VibeTubeJobResponse,
 } from '@/lib/api/types';
+import { getModelDisplayNameForSelection, getModelNameForSelection } from '@/lib/constants/tts';
 import { BOTTOM_SAFE_AREA_PADDING } from '@/lib/constants/ui';
 import {
   useDeleteGeneration,
@@ -268,11 +269,13 @@ export function HistoryTable() {
       onMutate: async (variables) => {
         setRegenerateStatusMessage('Checking model...');
         try {
-          const modelName = `qwen-tts-${variables.model_size || '1.7B'}`;
+          const engine = variables.engine || 'qwen';
+          const modelName = getModelNameForSelection(engine, variables.model_size);
+          const displayName = getModelDisplayNameForSelection(engine, variables.model_size);
           const modelStatus = await apiClient.getModelStatus();
           const model = modelStatus.models.find((entry) => entry.model_name === modelName);
           if (model && !model.downloaded) {
-            setRegenerateStatusMessage(`Downloading ${modelName}...`);
+            setRegenerateStatusMessage(`Downloading ${displayName}...`);
           } else {
             setRegenerateStatusMessage('Generating audio...');
           }

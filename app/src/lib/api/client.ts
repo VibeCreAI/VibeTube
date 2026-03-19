@@ -1,4 +1,5 @@
 import type { TranscriptionLanguageCode } from '@/lib/constants/languages';
+import type { WhisperModelSize } from '@/lib/constants/tts';
 import { useServerStore } from '@/stores/serverStore';
 import type {
   ActiveTasksResponse,
@@ -46,6 +47,60 @@ class ApiClient {
     return serverUrl;
   }
 
+  private extractErrorMessage(payload: unknown, fallback: string): string {
+    if (typeof payload === 'string' && payload.trim()) {
+      return payload;
+    }
+
+    if (Array.isArray(payload)) {
+      const parts = payload
+        .map((item) => this.extractErrorMessage(item, ''))
+        .filter((item) => item.trim().length > 0);
+      return parts.length > 0 ? parts.join('; ') : fallback;
+    }
+
+    if (payload && typeof payload === 'object') {
+      const record = payload as Record<string, unknown>;
+      if ('message' in record) {
+        return this.extractErrorMessage(record.message, fallback);
+      }
+      if ('detail' in record) {
+        return this.extractErrorMessage(record.detail, fallback);
+      }
+      if ('error' in record) {
+        return this.extractErrorMessage(record.error, fallback);
+      }
+      try {
+        return JSON.stringify(record);
+      } catch {
+        return fallback;
+      }
+    }
+
+    return fallback;
+  }
+
+  private async throwIfError(response: Response): Promise<void> {
+    if (response.ok) {
+      return;
+    }
+
+    const fallback = response.statusText || `HTTP error! status: ${response.status}`;
+    let payload: unknown = null;
+
+    try {
+      payload = await response.json();
+    } catch {
+      try {
+        payload = await response.text();
+      } catch {
+        payload = null;
+      }
+    }
+
+    throw new Error(this.extractErrorMessage(payload, fallback));
+  }
+
   private async request<T>(endpoint: string, options?: RequestInit): Promise<T> {
     const url = `${this.getBaseUrl()}${endpoint}`;
     const response = await fetch(url, {
@@ -56,12 +111,7 @@ class ApiClient {
       },
     });
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({
-        detail: response.statusText,
-      }));
-      throw new Error(error.detail || `HTTP error! status: ${response.status}`);
-    }
+    await this.throwIfError(response);
 
     return response.json();
   }
@@ -121,12 +171,7 @@ class ApiClient {
       body: formData,
     });
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({
-        detail: response.statusText,
-      }));
-      throw new Error(error.detail || `HTTP error! status: ${response.status}`);
-    }
+    await this.throwIfError(response);
 
     return response.json();
   }
@@ -162,12 +207,7 @@ class ApiClient {
     const url = `${this.getBaseUrl()}/profiles/${profileId}/export`;
     const response = await fetch(url);
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({
-        detail: response.statusText,
-      }));
-      throw new Error(error.detail || `HTTP error! status: ${response.status}`);
-    }
+    await this.throwIfError(response);
 
     return response.blob();
   }
@@ -182,12 +222,7 @@ class ApiClient {
       body: formData,
     });
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({
-        detail: response.statusText,
-      }));
-      throw new Error(error.detail || `HTTP error! status: ${response.status}`);
-    }
+    await this.throwIfError(response);
 
     return response.json();
   }
@@ -202,12 +237,7 @@ class ApiClient {
       body: formData,
     });
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({
-        detail: response.statusText,
-      }));
-      throw new Error(error.detail || `HTTP error! status: ${response.status}`);
-    }
+    await this.throwIfError(response);
 
     return response.json();
   }
@@ -240,12 +270,7 @@ class ApiClient {
       body: formData,
     });
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({
-        detail: response.statusText,
-      }));
-      throw new Error(error.detail || `HTTP error! status: ${response.status}`);
-    }
+    await this.throwIfError(response);
 
     return response.json();
   }
@@ -281,12 +306,7 @@ class ApiClient {
     const url = `${this.getBaseUrl()}/history/${generationId}/export`;
     const response = await fetch(url);
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({
-        detail: response.statusText,
-      }));
-      throw new Error(error.detail || `HTTP error! status: ${response.status}`);
-    }
+    await this.throwIfError(response);
 
     return response.blob();
   }
@@ -295,12 +315,7 @@ class ApiClient {
     const url = `${this.getBaseUrl()}/history/${generationId}/export-audio`;
     const response = await fetch(url);
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({
-        detail: response.statusText,
-      }));
-      throw new Error(error.detail || `HTTP error! status: ${response.status}`);
-    }
+    await this.throwIfError(response);
 
     return response.blob();
   }
@@ -321,12 +336,7 @@ class ApiClient {
       body: formData,
     });
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({
-        detail: response.statusText,
-      }));
-      throw new Error(error.detail || `HTTP error! status: ${response.status}`);
-    }
+    await this.throwIfError(response);
 
     return response.json();
   }
@@ -344,11 +354,15 @@ class ApiClient {
   async transcribeAudio(
     file: File,
     language?: TranscriptionLanguageCode,
+    model?: WhisperModelSize,
   ): Promise<TranscriptionResponse> {
     const formData = new FormData();
     formData.append('file', file);
     if (language && language !== 'auto') {
       formData.append('language', language);
+    }
+    if (model) {
+      formData.append('model', model);
     }
 
     const url = `${this.getBaseUrl()}/transcribe`;
@@ -357,12 +371,7 @@ class ApiClient {
       body: formData,
     });
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({
-        detail: response.statusText,
-      }));
-      throw new Error(error.detail || `HTTP error! status: ${response.status}`);
-    }
+    await this.throwIfError(response);
 
     return response.json();
   }
@@ -510,12 +519,7 @@ class ApiClient {
       body: formData,
     });
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({
-        detail: response.statusText,
-      }));
-      throw new Error(error.detail || `HTTP error! status: ${response.status}`);
-    }
+    await this.throwIfError(response);
 
     return response.json();
   }
@@ -618,12 +622,7 @@ class ApiClient {
     const url = `${this.getBaseUrl()}/stories/${storyId}/export-audio`;
     const response = await fetch(url);
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({
-        detail: response.statusText,
-      }));
-      throw new Error(error.detail || `HTTP error! status: ${response.status}`);
-    }
+    await this.throwIfError(response);
 
     return response.blob();
   }
@@ -711,10 +710,7 @@ class ApiClient {
       method: 'POST',
       body: formData,
     });
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ detail: response.statusText }));
-      throw new Error(error.detail || `HTTP error! status: ${response.status}`);
-    }
+    await this.throwIfError(response);
     return response.json();
   }
 
@@ -784,10 +780,7 @@ class ApiClient {
       method: 'POST',
       body: formData,
     });
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ detail: response.statusText }));
-      throw new Error(error.detail || `HTTP error! status: ${response.status}`);
-    }
+    await this.throwIfError(response);
     return response.json();
   }
 
@@ -801,10 +794,7 @@ class ApiClient {
   ): Promise<Blob> {
     const url = `${this.getBaseUrl()}/vibetube/jobs/${jobId}/export-video?format=${format}`;
     const response = await fetch(url);
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ detail: response.statusText }));
-      throw new Error(error.detail || `HTTP error! status: ${response.status}`);
-    }
+    await this.throwIfError(response);
     return response.blob();
   }
 
@@ -815,15 +805,7 @@ class ApiClient {
   async exportVibeTubeSubtitles(jobId: string, format: 'srt' | 'vtt' = 'srt'): Promise<Blob> {
     const url = `${this.getBaseUrl()}/vibetube/jobs/${jobId}/export-subtitles?format=${format}`;
     const response = await fetch(url);
-    if (!response.ok) {
-      if (response.status === 404) {
-        throw new Error(
-          'Subtitle export endpoint not found on backend. Restart/update backend server, then try again.',
-        );
-      }
-      const error = await response.json().catch(() => ({ detail: response.statusText }));
-      throw new Error(error.detail || `HTTP error! status: ${response.status}`);
-    }
+    await this.throwIfError(response);
     return response.blob();
   }
 
@@ -858,10 +840,7 @@ class ApiClient {
       body: formData,
     });
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ detail: response.statusText }));
-      throw new Error(error.detail || `HTTP error! status: ${response.status}`);
-    }
+    await this.throwIfError(response);
     return response.json();
   }
 
@@ -933,3 +912,6 @@ class ApiClient {
 }
 
 export const apiClient = new ApiClient();
+
+
+

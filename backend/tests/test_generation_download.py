@@ -8,8 +8,12 @@ the model is already cached.
 import asyncio
 import json
 import httpx
+import pytest
 from typing import List, Dict, Optional
 from datetime import datetime
+
+
+pytestmark = pytest.mark.asyncio
 
 
 async def monitor_sse_stream(model_name: str, timeout: int = 120):

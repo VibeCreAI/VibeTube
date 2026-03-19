@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import Annotated, List, Optional
 from datetime import datetime
 import asyncio
 import uvicorn
@@ -49,6 +49,18 @@ def _safe_content_disposition(disposition_type: str, filename: str) -> str:
 
 
 from . import database, models, profiles, history, tts, transcribe, config, export_import, channels, stories, vibetube, __version__
+from .backends import (
+    check_model_loaded,
+    engine_needs_trim,
+    get_all_model_configs,
+    get_engine_config,
+    get_model_config,
+    get_model_load_func,
+    get_tts_backend_for_engine,
+    get_tts_model_configs,
+    load_engine_model,
+    unload_model_by_config,
+)
 from .database import (
     get_db,
     Generation as DBGeneration,
@@ -59,8 +71,110 @@ from .database import (
 from .utils.progress import get_progress_manager
 from .utils.tasks import get_task_manager
 from .utils.cache import clear_voice_prompt_cache
+from .utils.chunked_tts import generate_chunked
+from .utils.audio import trim_tts_output
 from .utils import avatar_local
 from .platform_detect import get_backend_type
+
+UPLOAD_CHUNK_SIZE = 1024 * 1024
+MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024
+
+
+def _extract_error_message(detail) -> str:
+    """Extract a readable message from FastAPI error payloads."""
+    if isinstance(detail, dict):
+        message = detail.get("message")
+        if isinstance(message, str) and message.strip():
+            return message
+        if "detail" in detail:
+            return _extract_error_message(detail["detail"])
+        return json.dumps(detail, ensure_ascii=False)
+    if isinstance(detail, list):
+        parts = [_extract_error_message(item) for item in detail]
+        return "; ".join(part for part in parts if part)
+    if detail is None:
+        return ""
+    return str(detail)
+
+
+async def _write_upload_to_temp(
+    file: UploadFile,
+    *,
+    suffix: str,
+    max_size_bytes: int = MAX_UPLOAD_SIZE_BYTES,
+) -> Path:
+    """Stream an uploaded file to disk with a hard size cap."""
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        total_size = 0
+        while chunk := await file.read(UPLOAD_CHUNK_SIZE):
+            total_size += len(chunk)
+            if total_size > max_size_bytes:
+                Path(tmp.name).unlink(missing_ok=True)
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"File too large (max {max_size_bytes // (1024 * 1024)} MB)",
+                )
+            tmp.write(chunk)
+        return Path(tmp.name)
+
+
+def _get_model_cache_dir(hf_repo_id: str) -> Optional[Path]:
+    try:
+        from huggingface_hub import constants as hf_constants
+
+        return Path(hf_constants.HF_HUB_CACHE) / ("models--" + hf_repo_id.replace("/", "--"))
+    except Exception:
+        return None
+
+
+def _is_model_downloaded(model_config) -> tuple[bool, Optional[float]]:
+    cache_dir = _get_model_cache_dir(model_config.hf_repo_id)
+    if not cache_dir or not cache_dir.exists():
+        return False, None
+
+    blobs_dir = cache_dir / "blobs"
+    if blobs_dir.exists() and any(blobs_dir.glob("*.incomplete")):
+        return False, None
+
+    snapshots_dir = cache_dir / "snapshots"
+    if not snapshots_dir.exists():
+        return False, None
+
+    has_weights = any(
+        any(snapshots_dir.rglob(ext))
+        for ext in ("*.safetensors", "*.bin", "*.pt", "*.pth", "*.npz", "*.onnx")
+    )
+    if not has_weights:
+        return False, None
+
+    size_mb = None
+    try:
+        size_bytes = sum(
+            f.stat().st_size for f in cache_dir.rglob("*") if f.is_file() and not f.name.endswith(".incomplete")
+        )
+        size_mb = size_bytes / (1024 * 1024)
+    except Exception:
+        pass
+    return True, size_mb
+
+
+def _get_generation_model_config(engine: str, model_size: str):
+    config = get_engine_config(engine, model_size)
+    if config:
+        return config
+    raise HTTPException(status_code=400, detail=f"Unsupported engine/model combination: {engine}/{model_size}")
+
+
+def _model_download_message(model_config) -> str:
+    if model_config.engine == "qwen":
+        return f"Model {model_config.model_size} is being downloaded. Please wait and try again."
+    return f"{model_config.display_name} is being downloaded. Please wait and try again."
+
+
+async def _run_model_load(model_config) -> None:
+    result = get_model_load_func(model_config)()
+    if asyncio.iscoroutine(result):
+        await result
 
 
 async def generate_and_persist_speech(
@@ -82,44 +196,59 @@ async def generate_and_persist_speech(
         if not profile:
             raise HTTPException(status_code=404, detail="Profile not found")
 
-        tts_model = tts.get_tts_model()
-        model_size = data.model_size or "1.7B"
+        engine = data.engine or "qwen"
+        model_size = data.model_size or ("1.7B" if engine == "qwen" else "default")
+        model_config = _get_generation_model_config(engine, model_size)
+        tts_model = tts.get_tts_model(engine)
 
         if not tts_model._is_model_cached(model_size):
-            model_name = f"qwen-tts-{model_size}"
-
             async def download_model_background():
                 try:
-                    await tts_model.load_model_async(model_size)
+                    await load_engine_model(engine, model_size)
                 except Exception as e:
-                    task_manager.error_download(model_name, str(e))
+                    task_manager.error_download(model_config.model_name, str(e))
 
-            task_manager.start_download(model_name)
+            task_manager.start_download(model_config.model_name)
             asyncio.create_task(download_model_background())
 
             raise HTTPException(
                 status_code=202,
                 detail={
-                    "message": f"Model {model_size} is being downloaded. Please wait and try again.",
-                    "model_name": model_name,
+                    "message": _model_download_message(model_config),
+                    "model_name": model_config.model_name,
                     "downloading": True,
                 },
             )
 
-        await tts_model.load_model_async(model_size)
+        await load_engine_model(engine, model_size)
 
         voice_prompt = await profiles.create_voice_prompt_for_profile(
             data.profile_id,
             db,
+            engine=engine,
         )
 
-        audio, sample_rate = await tts_model.generate(
-            data.text,
-            voice_prompt,
-            data.language,
-            data.seed,
-            data.instruct,
-        )
+        trim_fn = trim_tts_output if engine_needs_trim(engine) else None
+        if engine == "qwen":
+            audio, sample_rate = await tts_model.generate(
+                data.text,
+                voice_prompt,
+                data.language,
+                data.seed,
+                data.instruct,
+            )
+        else:
+            audio, sample_rate = await generate_chunked(
+                tts_model,
+                data.text,
+                voice_prompt,
+                language=data.language,
+                seed=data.seed,
+                instruct=data.instruct if engine == "qwen" else None,
+                max_chunk_chars=800,
+                crossfade_ms=50,
+                trim_fn=trim_fn,
+            )
 
         duration = len(audio) / sample_rate
 
@@ -133,11 +262,13 @@ async def generate_and_persist_speech(
             profile_id=data.profile_id,
             text=data.text,
             language=data.language,
+            engine=engine,
+            model_size=model_size,
             audio_path=str(audio_path),
             duration=duration,
             seed=data.seed,
             db=db,
-            instruct=data.instruct,
+            instruct=data.instruct if engine == "qwen" else None,
         )
 
         task_manager.complete_generation(generation_task_id)
@@ -150,7 +281,7 @@ async def generate_and_persist_speech(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         task_manager.complete_generation(generation_task_id)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_extract_error_message(e))
 
 
 async def create_generation_from_uploaded_audio(
@@ -170,16 +301,13 @@ async def create_generation_from_uploaded_audio(
     uploaded_ext = Path(file.filename or "").suffix.lower()
     file_suffix = uploaded_ext if uploaded_ext in allowed_audio_exts else ".wav"
 
-    with tempfile.NamedTemporaryFile(suffix=file_suffix, delete=False) as tmp:
-        content = await file.read()
-        tmp.write(content)
-        tmp_path = Path(tmp.name)
+    tmp_path = await _write_upload_to_temp(file, suffix=file_suffix)
 
     destination_path: Optional[Path] = None
     try:
         from .utils.audio import load_audio
 
-        audio, sr = load_audio(str(tmp_path))
+        audio, sr = await asyncio.to_thread(load_audio, str(tmp_path))
         duration = len(audio) / sr
 
         destination_path = config.get_generations_dir() / f"{uuid.uuid4()}{file_suffix}"
@@ -193,6 +321,8 @@ async def create_generation_from_uploaded_audio(
             profile_id=profile_id,
             text=generation_text,
             language=generation_language,
+            engine="qwen",
+            model_size="1.7B",
             audio_path=str(destination_path),
             duration=duration,
             seed=None,
@@ -208,7 +338,7 @@ async def create_generation_from_uploaded_audio(
     except Exception as e:
         if destination_path and destination_path.exists():
             destination_path.unlink(missing_ok=True)
-        raise HTTPException(status_code=500, detail=f"Failed to process audio file: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to process audio file: {_extract_error_message(e)}")
     finally:
         tmp_path.unlink(missing_ok=True)
 
@@ -750,16 +880,12 @@ async def add_profile_sample(
     _allowed_audio_exts = {'.wav', '.mp3', '.m4a', '.ogg', '.flac', '.aac', '.webm', '.opus'}
     _uploaded_ext = Path(file.filename or '').suffix.lower()
     file_suffix = _uploaded_ext if _uploaded_ext in _allowed_audio_exts else '.wav'
-
-    with tempfile.NamedTemporaryFile(suffix=file_suffix, delete=False) as tmp:
-        content = await file.read()
-        tmp.write(content)
-        tmp_path = tmp.name
+    tmp_path = await _write_upload_to_temp(file, suffix=file_suffix)
 
     try:
         sample = await profiles.add_profile_sample(
             profile_id,
-            tmp_path,
+            str(tmp_path),
             reference_text,
             db,
         )
@@ -767,10 +893,10 @@ async def add_profile_sample(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to process audio file: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to process audio file: {_extract_error_message(e)}")
     finally:
         # Clean up temp file
-        Path(tmp_path).unlink(missing_ok=True)
+        tmp_path.unlink(missing_ok=True)
 
 
 @app.get("/profiles/{profile_id}/samples", response_model=List[models.ProfileSampleResponse])
@@ -1358,29 +1484,56 @@ async def stream_speech(
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
 
-    tts_model = tts.get_tts_model()
-    model_size = data.model_size or "1.7B"
+    try:
+        engine = data.engine or "qwen"
+        model_size = data.model_size or ("1.7B" if engine == "qwen" else "default")
+        model_config = _get_generation_model_config(engine, model_size)
+        tts_model = tts.get_tts_model(engine)
 
-    if not tts_model._is_model_cached(model_size):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Model {model_size} is not downloaded yet. Use /generate to trigger a download.",
+        if not tts_model._is_model_cached(model_size):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{model_config.display_name} is not downloaded yet. "
+                    "Use /generate or /models/download first."
+                ),
+            )
+
+        await load_engine_model(engine, model_size)
+
+        voice_prompt = await profiles.create_voice_prompt_for_profile(
+            data.profile_id,
+            db,
+            engine=engine,
         )
 
-    # Load the correct model before building the voice prompt (fixes issue #96)
-    await tts_model.load_model_async(model_size)
-
-    voice_prompt = await profiles.create_voice_prompt_for_profile(data.profile_id, db)
-
-    audio, sample_rate = await tts_model.generate(
-        data.text,
-        voice_prompt,
-        data.language,
-        data.seed,
-        data.instruct,
-    )
-
-    wav_bytes = tts.audio_to_wav_bytes(audio, sample_rate)
+        trim_fn = trim_tts_output if engine_needs_trim(engine) else None
+        if engine == "qwen":
+            audio, sample_rate = await tts_model.generate(
+                data.text,
+                voice_prompt,
+                data.language,
+                data.seed,
+                data.instruct,
+            )
+        else:
+            audio, sample_rate = await generate_chunked(
+                tts_model,
+                data.text,
+                voice_prompt,
+                language=data.language,
+                seed=data.seed,
+                max_chunk_chars=800,
+                crossfade_ms=50,
+                trim_fn=trim_fn,
+            )
+        wav_bytes = tts.audio_to_wav_bytes(audio, sample_rate)
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=_extract_error_message(e))
 
     async def _wav_stream():
         # Yield in chunks so large responses don't block the event loop
@@ -2299,66 +2452,71 @@ async def export_generation_audio(
 @app.post("/transcribe", response_model=models.TranscriptionResponse)
 async def transcribe_audio(
     file: UploadFile = File(...),
-    language: Optional[str] = Form(None),
+    language: Annotated[Optional[str], Form()] = None,
+    model: Annotated[Optional[str], Form()] = None,
 ):
     """Transcribe audio file to text."""
-    # Save uploaded file to temporary location
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-        content = await file.read()
-        tmp.write(content)
-        tmp_path = tmp.name
-    
+    allowed_audio_exts = {".wav", ".mp3", ".m4a", ".ogg", ".flac", ".aac", ".webm", ".opus"}
+    uploaded_ext = Path(file.filename or "").suffix.lower()
+    file_suffix = uploaded_ext if uploaded_ext in allowed_audio_exts else ".wav"
+    tmp_path = await _write_upload_to_temp(file, suffix=file_suffix)
+
     try:
-        # Get audio duration
         from .utils.audio import load_audio
-        audio, sr = load_audio(tmp_path)
+
+        audio, sr = await asyncio.to_thread(load_audio, str(tmp_path))
         duration = len(audio) / sr
-        
-        # Transcribe
+
         whisper_model = transcribe.get_whisper_model()
+        model_size = (model or getattr(whisper_model, "model_size", None) or "base").strip() or "base"
+        model_config = get_model_config(f"whisper-{model_size}")
+        if not model_config:
+            raise HTTPException(status_code=400, detail=f"Unsupported Whisper model: {model_size}")
 
-        # Check if Whisper model is downloaded (uses default size "base")
-        model_size = whisper_model.model_size
-        model_name = f"openai/whisper-{model_size}"
-
-        # Check if model is cached
-        from huggingface_hub import constants as hf_constants
-        repo_cache = Path(hf_constants.HF_HUB_CACHE) / ("models--" + model_name.replace("/", "--"))
-        if not repo_cache.exists():
-            # Start download in background
-            progress_model_name = f"whisper-{model_size}"
+        if not whisper_model._is_model_cached(model_size):
+            task_manager = get_task_manager()
+            progress_manager = get_progress_manager()
 
             async def download_whisper_background():
                 try:
-                    await whisper_model.load_model_async(model_size)
+                    await _run_model_load(model_config)
                 except Exception as e:
-                    get_task_manager().error_download(progress_model_name, str(e))
+                    progress_manager.mark_error(model_config.model_name, str(e))
+                    task_manager.error_download(model_config.model_name, str(e))
 
-            get_task_manager().start_download(progress_model_name)
+            task_manager.start_download(model_config.model_name)
+            progress_manager.update_progress(
+                model_name=model_config.model_name,
+                current=0,
+                total=0,
+                filename="Connecting to HuggingFace...",
+                status="downloading",
+            )
             asyncio.create_task(download_whisper_background())
 
-            # Return 202 Accepted
             raise HTTPException(
                 status_code=202,
                 detail={
-                    "message": f"Whisper model {model_size} is being downloaded. Please wait and try again.",
-                    "model_name": progress_model_name,
-                    "downloading": True
-                }
+                    "message": _model_download_message(model_config),
+                    "model_name": model_config.model_name,
+                    "downloading": True,
+                },
             )
 
-        text = await whisper_model.transcribe(tmp_path, language)
-        
+        text = await whisper_model.transcribe(str(tmp_path), language, model_size)
+
         return models.TranscriptionResponse(
             text=text,
             duration=duration,
         )
-        
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_extract_error_message(e))
     finally:
-        # Clean up temp file
-        Path(tmp_path).unlink(missing_ok=True)
+        tmp_path.unlink(missing_ok=True)
 
 
 # ============================================
@@ -2888,24 +3046,59 @@ async def get_sample_audio(sample_id: str, db: Session = Depends(get_db)):
 # ============================================
 
 @app.post("/models/load")
-async def load_model(model_size: str = "1.7B"):
+async def load_model(
+    model_name: Optional[str] = Query(None),
+    model_size: str = Query("1.7B"),
+    engine: str = Query("qwen"),
+):
     """Manually load TTS model."""
     try:
-        tts_model = tts.get_tts_model()
-        await tts_model.load_model_async(model_size)
-        return {"message": f"Model {model_size} loaded successfully"}
+        model_config = get_model_config(model_name) if model_name else None
+        if model_config is None:
+            if engine == "whisper":
+                model_config = get_model_config(f"whisper-{model_size}")
+            else:
+                resolved_size = model_size if engine == "qwen" else "default"
+                model_config = get_engine_config(engine, resolved_size)
+        if model_config is None:
+            target = model_name or f"{engine}/{model_size}"
+            raise HTTPException(status_code=400, detail=f"Unknown model: {target}")
+
+        await _run_model_load(model_config)
+        return {"message": f"{model_config.display_name} loaded successfully"}
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_extract_error_message(e))
 
 
 @app.post("/models/unload")
-async def unload_model():
+async def unload_model(
+    model_name: Optional[str] = Query(None),
+    model_size: str = Query("1.7B"),
+    engine: str = Query("qwen"),
+):
     """Unload TTS model to free memory."""
     try:
-        tts.unload_tts_model()
-        return {"message": "Model unloaded successfully"}
+        model_config = get_model_config(model_name) if model_name else None
+        if model_config is None:
+            if engine == "whisper":
+                model_config = get_model_config(f"whisper-{model_size}")
+            else:
+                resolved_size = model_size if engine == "qwen" else "default"
+                model_config = get_engine_config(engine, resolved_size)
+        if model_config is None:
+            target = model_name or f"{engine}/{model_size}"
+            raise HTTPException(status_code=400, detail=f"Unknown model: {target}")
+
+        unloaded = unload_model_by_config(model_config)
+        if not unloaded:
+            return {"message": f"{model_config.display_name} was not loaded"}
+        return {"message": f"{model_config.display_name} unloaded successfully"}
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_extract_error_message(e))
 
 
 @app.get("/models/progress/{model_name}")
@@ -2934,320 +3127,80 @@ async def get_model_progress(model_name: str):
 @app.get("/models/status", response_model=models.ModelStatusListResponse)
 async def get_model_status():
     """Get status of all available models."""
-    from huggingface_hub import constants as hf_constants
-    from pathlib import Path
-    
-    backend_type = get_backend_type()
     task_manager = get_task_manager()
-    
-    # Get set of currently downloading model names
     active_download_names = {task.model_name for task in task_manager.get_active_downloads()}
-    
-    # Try to import scan_cache_dir (might not be available in older versions)
-    try:
-        from huggingface_hub import scan_cache_dir
-        use_scan_cache = True
-    except ImportError:
-        use_scan_cache = False
-    
-    def check_tts_loaded(model_size: str):
-        """Check if TTS model is loaded with specific size."""
-        try:
-            tts_model = tts.get_tts_model()
-            return tts_model.is_loaded() and getattr(tts_model, 'model_size', None) == model_size
-        except Exception:
-            return False
-    
-    def check_whisper_loaded(model_size: str):
-        """Check if Whisper model is loaded with specific size."""
-        try:
-            whisper_model = transcribe.get_whisper_model()
-            return whisper_model.is_loaded() and getattr(whisper_model, 'model_size', None) == model_size
-        except Exception:
-            return False
-    
-    # Use backend-specific model IDs
-    if backend_type == "mlx":
-        tts_1_7b_id = "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16"
-        tts_0_6b_id = "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16"  # Fallback to 1.7B
-        # MLX backend uses openai/whisper-* models, not mlx-community
-        whisper_base_id = "openai/whisper-base"
-        whisper_small_id = "openai/whisper-small"
-        whisper_medium_id = "openai/whisper-medium"
-        whisper_large_id = "openai/whisper-large"
-    else:
-        tts_1_7b_id = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
-        tts_0_6b_id = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
-        whisper_base_id = "openai/whisper-base"
-        whisper_small_id = "openai/whisper-small"
-        whisper_medium_id = "openai/whisper-medium"
-        whisper_large_id = "openai/whisper-large"
-    
-    model_configs = [
-        {
-            "model_name": "qwen-tts-1.7B",
-            "display_name": "Qwen TTS 1.7B",
-            "hf_repo_id": tts_1_7b_id,
-            "model_size": "1.7B",
-            "check_loaded": lambda: check_tts_loaded("1.7B"),
-        },
-        {
-            "model_name": "qwen-tts-0.6B",
-            "display_name": "Qwen TTS 0.6B",
-            "hf_repo_id": tts_0_6b_id,
-            "model_size": "0.6B",
-            "check_loaded": lambda: check_tts_loaded("0.6B"),
-        },
-        {
-            "model_name": "whisper-base",
-            "display_name": "Whisper Base",
-            "hf_repo_id": whisper_base_id,
-            "model_size": "base",
-            "check_loaded": lambda: check_whisper_loaded("base"),
-        },
-        {
-            "model_name": "whisper-small",
-            "display_name": "Whisper Small",
-            "hf_repo_id": whisper_small_id,
-            "model_size": "small",
-            "check_loaded": lambda: check_whisper_loaded("small"),
-        },
-        {
-            "model_name": "whisper-medium",
-            "display_name": "Whisper Medium",
-            "hf_repo_id": whisper_medium_id,
-            "model_size": "medium",
-            "check_loaded": lambda: check_whisper_loaded("medium"),
-        },
-        {
-            "model_name": "whisper-large",
-            "display_name": "Whisper Large",
-            "hf_repo_id": whisper_large_id,
-            "model_size": "large",
-            "check_loaded": lambda: check_whisper_loaded("large"),
-        },
-    ]
-    
-    # Build a mapping of model_name -> hf_repo_id so we can check if shared repos are downloading
-    model_to_repo = {cfg["model_name"]: cfg["hf_repo_id"] for cfg in model_configs}
-    
-    # Get the set of hf_repo_ids that are currently being downloaded
-    # This handles the case where multiple models share the same repo (e.g., 0.6B and 1.7B on MLX)
-    active_download_repos = {model_to_repo.get(name) for name in active_download_names if name in model_to_repo}
-    
-    # Get HuggingFace cache info (if available)
-    cache_info = None
-    if use_scan_cache:
-        try:
-            cache_info = scan_cache_dir()
-        except Exception:
-            # Function failed, continue without it
-            pass
-    
+    model_configs = get_all_model_configs()
+    repo_by_model_name = {cfg.model_name: cfg.hf_repo_id for cfg in model_configs}
+    active_download_repos = {
+        repo_by_model_name[name]
+        for name in active_download_names
+        if name in repo_by_model_name
+    }
+
     statuses = []
-    
-    for config in model_configs:
-        try:
+    for model_config in model_configs:
+        downloaded, size_mb = _is_model_downloaded(model_config)
+        downloading = (
+            model_config.model_name in active_download_names
+            or model_config.hf_repo_id in active_download_repos
+        )
+        if downloading:
             downloaded = False
             size_mb = None
-            loaded = False
-            
-            # Method 1: Try using scan_cache_dir if available
-            if cache_info:
-                repo_id = config["hf_repo_id"]
-                for repo in cache_info.repos:
-                    if repo.repo_id == repo_id:
-                        # Check if actual model weight files exist (not just config files)
-                        # scan_cache_dir only shows completed files, so check if any are model weights
-                        has_model_weights = False
-                        for rev in repo.revisions:
-                            for f in rev.files:
-                                fname = f.file_name.lower()
-                                if fname.endswith(('.safetensors', '.bin', '.pt', '.pth', '.npz')):
-                                    has_model_weights = True
-                                    break
-                            if has_model_weights:
-                                break
-                        
-                        # Also check for .incomplete files in blobs directory (downloads in progress)
-                        has_incomplete = False
-                        try:
-                            cache_dir = hf_constants.HF_HUB_CACHE
-                            blobs_dir = Path(cache_dir) / ("models--" + repo_id.replace("/", "--")) / "blobs"
-                            if blobs_dir.exists():
-                                has_incomplete = any(blobs_dir.glob("*.incomplete"))
-                        except Exception:
-                            pass
-                        
-                        # Only mark as downloaded if we have model weights AND no incomplete files
-                        if has_model_weights and not has_incomplete:
-                            downloaded = True
-                            # Calculate size from cache info
-                            try:
-                                total_size = sum(revision.size_on_disk for revision in repo.revisions)
-                                size_mb = total_size / (1024 * 1024)
-                            except Exception:
-                                pass
-                        break
-            
-            # Method 2: Fallback to checking cache directory directly (using HuggingFace's OS-specific cache location)
-            if not downloaded:
-                try:
-                    cache_dir = hf_constants.HF_HUB_CACHE
-                    repo_cache = Path(cache_dir) / ("models--" + config["hf_repo_id"].replace("/", "--"))
-                    
-                    if repo_cache.exists():
-                        # Check for .incomplete files - if any exist, download is still in progress
-                        blobs_dir = repo_cache / "blobs"
-                        has_incomplete = blobs_dir.exists() and any(blobs_dir.glob("*.incomplete"))
-                        
-                        if not has_incomplete:
-                            # Check for actual model weight files (not just index files)
-                            # in the snapshots directory (symlinks to completed blobs)
-                            snapshots_dir = repo_cache / "snapshots"
-                            has_model_files = False
-                            if snapshots_dir.exists():
-                                has_model_files = (
-                                    any(snapshots_dir.rglob("*.bin")) or
-                                    any(snapshots_dir.rglob("*.safetensors")) or
-                                    any(snapshots_dir.rglob("*.pt")) or
-                                    any(snapshots_dir.rglob("*.pth")) or
-                                    any(snapshots_dir.rglob("*.npz"))
-                                )
-                            
-                            if has_model_files:
-                                downloaded = True
-                                # Calculate size (exclude .incomplete files)
-                                try:
-                                    total_size = sum(
-                                        f.stat().st_size for f in repo_cache.rglob("*") 
-                                        if f.is_file() and not f.name.endswith('.incomplete')
-                                    )
-                                    size_mb = total_size / (1024 * 1024)
-                                except Exception:
-                                    pass
-                except Exception:
-                    pass
-            
-            # Method 3 removed - checking for config.json is too lenient
-            # Methods 1 and 2 properly verify that model weight files exist
-            
-            # Check if loaded in memory
-            try:
-                loaded = config["check_loaded"]()
-            except Exception:
-                loaded = False
-            
-            # Check if this model (or its shared repo) is currently being downloaded
-            is_downloading = config["hf_repo_id"] in active_download_repos
-            
-            # If downloading, don't report as downloaded (partial files exist)
-            if is_downloading:
-                downloaded = False
-                size_mb = None  # Don't show partial size during download
-            
-            statuses.append(models.ModelStatus(
-                model_name=config["model_name"],
-                display_name=config["display_name"],
+
+        statuses.append(
+            models.ModelStatus(
+                model_name=model_config.model_name,
+                display_name=model_config.display_name,
+                engine=model_config.engine,
+                model_size=model_config.model_size,
                 downloaded=downloaded,
-                downloading=is_downloading,
+                downloading=downloading,
                 size_mb=size_mb,
-                loaded=loaded,
-            ))
-        except Exception as e:
-            # If check fails, try to at least check if loaded
-            try:
-                loaded = config["check_loaded"]()
-            except Exception:
-                loaded = False
-            
-            # Check if this model (or its shared repo) is currently being downloaded
-            is_downloading = config["hf_repo_id"] in active_download_repos
-            
-            statuses.append(models.ModelStatus(
-                model_name=config["model_name"],
-                display_name=config["display_name"],
-                downloaded=False,  # Assume not downloaded if check failed
-                downloading=is_downloading,
-                size_mb=None,
-                loaded=loaded,
-            ))
-    
+                loaded=check_model_loaded(model_config),
+            )
+        )
+
     return models.ModelStatusListResponse(models=statuses)
 
 
 @app.post("/models/download")
 async def trigger_model_download(request: models.ModelDownloadRequest):
     """Trigger download of a specific model."""
-    import asyncio
-    
     task_manager = get_task_manager()
     progress_manager = get_progress_manager()
-    
-    model_configs = {
-        "qwen-tts-1.7B": {
-            "model_size": "1.7B",
-            "load_func": lambda: tts.get_tts_model().load_model("1.7B"),
-        },
-        "qwen-tts-0.6B": {
-            "model_size": "0.6B",
-            "load_func": lambda: tts.get_tts_model().load_model("0.6B"),
-        },
-        "whisper-base": {
-            "model_size": "base",
-            "load_func": lambda: transcribe.get_whisper_model().load_model("base"),
-        },
-        "whisper-small": {
-            "model_size": "small",
-            "load_func": lambda: transcribe.get_whisper_model().load_model("small"),
-        },
-        "whisper-medium": {
-            "model_size": "medium",
-            "load_func": lambda: transcribe.get_whisper_model().load_model("medium"),
-        },
-        "whisper-large": {
-            "model_size": "large",
-            "load_func": lambda: transcribe.get_whisper_model().load_model("large"),
-        },
-    }
-    
-    if request.model_name not in model_configs:
+    model_config = get_model_config(request.model_name)
+    if not model_config:
         raise HTTPException(status_code=400, detail=f"Unknown model: {request.model_name}")
-    
-    config = model_configs[request.model_name]
-    
+
+    downloaded, _ = _is_model_downloaded(model_config)
+    if downloaded:
+        return {"message": f"{model_config.display_name} is already downloaded"}
+
+    if task_manager.is_download_active(model_config.model_name):
+        return {"message": f"{model_config.display_name} download already in progress"}
+
     async def download_in_background():
         """Download model in background without blocking the HTTP request."""
         try:
-            # Call the load function (which may be async)
-            result = config["load_func"]()
-            # If it's a coroutine, await it
-            if asyncio.iscoroutine(result):
-                await result
-            task_manager.complete_download(request.model_name)
+            await _run_model_load(model_config)
+            progress_manager.mark_complete(model_config.model_name)
+            task_manager.complete_download(model_config.model_name)
         except Exception as e:
-            task_manager.error_download(request.model_name, str(e))
+            progress_manager.mark_error(model_config.model_name, str(e))
+            task_manager.error_download(model_config.model_name, str(e))
 
-    # Start tracking download
-    task_manager.start_download(request.model_name)
-    
-    # Initialize progress state so SSE endpoint has initial data to send.
-    # This fixes a race condition where the frontend connects to SSE before
-    # any progress callbacks have fired (especially for large models like Qwen
-    # where huggingface_hub takes time to fetch metadata for all files).
+    task_manager.start_download(model_config.model_name)
     progress_manager.update_progress(
-        model_name=request.model_name,
+        model_name=model_config.model_name,
         current=0,
-        total=0,  # Will be updated once actual total is known
+        total=0,
         filename="Connecting to HuggingFace...",
         status="downloading",
     )
 
-    # Start download in background task (don't await)
     asyncio.create_task(download_in_background())
-
-    # Return immediately - frontend should poll progress endpoint
-    return {"message": f"Model {request.model_name} download started"}
+    return {"message": f"{model_config.display_name} download started"}
 
 
 @app.get("/image-models/stylizedpixel/status", response_model=models.ImageModelStatusResponse)
@@ -3283,84 +3236,34 @@ async def download_stylizedpixel_image_model():
 @app.delete("/models/{model_name}")
 async def delete_model(model_name: str):
     """Delete a downloaded model from the HuggingFace cache."""
-    import shutil
-    import os
     from huggingface_hub import constants as hf_constants
-    
-    # Map model names to HuggingFace repo IDs
-    model_configs = {
-        "qwen-tts-1.7B": {
-            "hf_repo_id": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
-            "model_size": "1.7B",
-            "model_type": "tts",
-        },
-        "qwen-tts-0.6B": {
-            "hf_repo_id": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
-            "model_size": "0.6B",
-            "model_type": "tts",
-        },
-        "whisper-base": {
-            "hf_repo_id": "openai/whisper-base",
-            "model_size": "base",
-            "model_type": "whisper",
-        },
-        "whisper-small": {
-            "hf_repo_id": "openai/whisper-small",
-            "model_size": "small",
-            "model_type": "whisper",
-        },
-        "whisper-medium": {
-            "hf_repo_id": "openai/whisper-medium",
-            "model_size": "medium",
-            "model_type": "whisper",
-        },
-        "whisper-large": {
-            "hf_repo_id": "openai/whisper-large",
-            "model_size": "large",
-            "model_type": "whisper",
-        },
-    }
-    
-    if model_name not in model_configs:
+
+    model_config = get_model_config(model_name)
+    if not model_config:
         raise HTTPException(status_code=400, detail=f"Unknown model: {model_name}")
-    
-    config = model_configs[model_name]
-    hf_repo_id = config["hf_repo_id"]
-    
+
     try:
-        # Check if model is loaded and unload it first
-        if config["model_type"] == "tts":
-            tts_model = tts.get_tts_model()
-            if tts_model.is_loaded() and tts_model.model_size == config["model_size"]:
-                tts.unload_tts_model()
-        elif config["model_type"] == "whisper":
-            whisper_model = transcribe.get_whisper_model()
-            if whisper_model.is_loaded() and whisper_model.model_size == config["model_size"]:
-                transcribe.unload_whisper_model()
-        
-        # Find and delete the cache directory (using HuggingFace's OS-specific cache location)
+        unload_model_by_config(model_config)
+
         cache_dir = hf_constants.HF_HUB_CACHE
-        repo_cache_dir = Path(cache_dir) / ("models--" + hf_repo_id.replace("/", "--"))
-        
-        # Check if the cache directory exists
+        repo_cache_dir = Path(cache_dir) / ("models--" + model_config.hf_repo_id.replace("/", "--"))
+
         if not repo_cache_dir.exists():
             raise HTTPException(status_code=404, detail=f"Model {model_name} not found in cache")
-        
-        # Delete the entire cache directory for this model
+
         try:
             shutil.rmtree(repo_cache_dir)
         except OSError as e:
             raise HTTPException(
                 status_code=500,
-                detail=f"Failed to delete model cache directory: {str(e)}"
+                detail=f"Failed to delete model cache directory: {str(e)}",
             )
-        
-        return {"message": f"Model {model_name} deleted successfully"}
-        
+
+        return {"message": f"{model_config.display_name} deleted successfully"}
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to delete model: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete model: {_extract_error_message(e)}")
 
 
 @app.post("/cache/clear")

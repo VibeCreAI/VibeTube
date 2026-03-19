@@ -1,27 +1,10 @@
 import { Mic, Pause, Play, Square } from 'lucide-react';
-import { memo, useEffect, useState } from 'react';
-import { Visualizer } from 'react-sound-visualizer';
+import { AudioReactiveVisualizer } from '@/components/AudioReactiveVisualizer';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { FormControl, FormItem, FormMessage } from '@/components/ui/form';
 import type { AudioProcessingOptions } from '@/lib/hooks/useAudioRecording';
 import { formatAudioDuration } from '@/lib/utils/audio';
-
-const MemoizedWaveform = memo(function MemoizedWaveform({
-  audioStream,
-}: {
-  audioStream: MediaStream;
-}) {
-  return (
-    <div className="absolute inset-0 pointer-events-none flex items-center justify-center opacity-30">
-      <Visualizer audio={audioStream} autoStart strokeColor="#b39a3d">
-        {({ canvasRef }) => (
-          <canvas ref={canvasRef} width={500} height={150} className="w-full h-full" />
-        )}
-      </Visualizer>
-    </div>
-  );
-});
 
 interface AudioSampleRecordingProps {
   file: File | null | undefined;
@@ -56,41 +39,13 @@ export function AudioSampleRecording({
   audioProcessing,
   onAudioProcessingChange,
 }: AudioSampleRecordingProps) {
-  const [audioStream, setAudioStream] = useState<MediaStream | null>(null);
-
-  // Request microphone access when component mounts
-  useEffect(() => {
-    if (!showWaveform) return;
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
-
-    let stream: MediaStream | null = null;
-
-    navigator.mediaDevices
-      .getUserMedia({ audio: true, video: false })
-      .then((s) => {
-        stream = s;
-        setAudioStream(s);
-      })
-      .catch((err) => {
-        console.warn('Could not access microphone for visualization:', err);
-      });
-
-    return () => {
-      if (stream) {
-        stream.getTracks().forEach((track) => {
-          track.stop();
-        });
-      }
-    };
-  }, [showWaveform]);
-
   return (
     <FormItem>
       <FormControl>
         <div className="space-y-4">
           {!isRecording && !file && (
             <div className="relative flex flex-col items-center justify-center gap-4 p-4 border-2 border-dashed rounded-lg min-h-[180px] overflow-hidden">
-              {showWaveform && audioStream && <MemoizedWaveform audioStream={audioStream} />}
+              {showWaveform && <AudioReactiveVisualizer autoCapture />}
               <Button
                 type="button"
                 onClick={onStart}
@@ -155,7 +110,7 @@ export function AudioSampleRecording({
 
           {isRecording && (
             <div className="relative flex flex-col items-center justify-center gap-4 p-4 border-2 border-accent rounded-lg bg-accent/5 min-h-[180px] overflow-hidden">
-              {showWaveform && audioStream && <MemoizedWaveform audioStream={audioStream} />}
+              {showWaveform && <AudioReactiveVisualizer autoCapture />}
               <div className="relative z-10 flex items-center gap-4">
                 <div className="flex items-center gap-2">
                   <div className="h-3 w-3 rounded-full bg-accent animate-pulse" />

@@ -28,8 +28,10 @@ export function RecordingPromptField({ language, mode, onModeChange }: Recording
       {mode === 'script' ? (
         <div className="space-y-2 rounded-md border bg-background/80 p-3">
           <div className="flex items-center justify-between gap-3">
-            <p className="text-sm font-medium">{SUPPORTED_LANGUAGES[language]} script</p>
-            <span className="text-xs text-muted-foreground">Target length: about 25 seconds</span>
+            <p className="text-sm font-medium">{SUPPORTED_LANGUAGES[language]} story prompt</p>
+            <span className="text-xs text-muted-foreground">
+              Target length: about 30-35 seconds
+            </span>
           </div>
           <p className="text-sm leading-6">{getVoiceSampleScript(language)}</p>
         </div>

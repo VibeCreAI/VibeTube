@@ -1,11 +1,11 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_data_files
-from PyInstaller.utils.hooks import collect_all
 from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_all
 from PyInstaller.utils.hooks import copy_metadata
 
-binaries = []
 datas = []
+binaries = []
 hiddenimports = ['backend', 'backend.main', 'backend.config', 'backend.database', 'backend.models', 'backend.profiles', 'backend.history', 'backend.tts', 'backend.transcribe', 'backend.platform_detect', 'backend.backends', 'backend.backends.base', 'backend.backends.pytorch_backend', 'backend.backends.luxtts_backend', 'backend.backends.chatterbox_backend', 'backend.backends.chatterbox_turbo_backend', 'backend.utils.audio', 'backend.utils.cache', 'backend.utils.chunked_tts', 'backend.utils.progress', 'backend.utils.hf_progress', 'backend.utils.validation', 'pedalboard', 'chatterbox', 'chatterbox.tts_turbo', 'chatterbox.mtl_tts', 'zipvoice', 'zipvoice.luxvoice', 'torch', 'transformers', 'fastapi', 'uvicorn', 'sqlalchemy', 'soundfile', 'qwen_tts', 'qwen_tts.inference', 'qwen_tts.inference.qwen3_tts_model', 'qwen_tts.inference.qwen3_tts_tokenizer', 'qwen_tts.core', 'qwen_tts.cli', 'requests', 'pkg_resources.extern']
 datas += collect_data_files('qwen_tts')
 datas += copy_metadata('qwen-tts')
@@ -17,20 +17,26 @@ datas += copy_metadata('safetensors')
 datas += copy_metadata('tqdm')
 hiddenimports += collect_submodules('qwen_tts')
 hiddenimports += collect_submodules('jaraco')
-zipvoice_datas, zipvoice_bins, zipvoice_hidden = collect_all('zipvoice')
-linacodec_datas, linacodec_bins, linacodec_hidden = collect_all('linacodec')
-lazy_loader_datas, lazy_loader_bins, lazy_loader_hidden = collect_all('lazy_loader')
-librosa_datas, librosa_bins, librosa_hidden = collect_all('librosa')
-inflect_datas, inflect_bins, inflect_hidden = collect_all('inflect')
-perth_datas, perth_bins, perth_hidden = collect_all('perth')
-piper_datas, piper_bins, piper_hidden = collect_all('piper_phonemize')
-binaries += zipvoice_bins + linacodec_bins + lazy_loader_bins + librosa_bins + inflect_bins + perth_bins + piper_bins
-datas += zipvoice_datas + linacodec_datas + lazy_loader_datas + librosa_datas + inflect_datas + perth_datas + piper_datas
-hiddenimports += zipvoice_hidden + linacodec_hidden + lazy_loader_hidden + librosa_hidden + inflect_hidden + perth_hidden + piper_hidden
+tmp_ret = collect_all('lazy_loader')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('librosa')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('qwen_tts')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('zipvoice')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('linacodec')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('inflect')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('perth')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('piper_phonemize')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
-    ['server.py'],
+    ['backend\\server.py'],
     pathex=[],
     binaries=binaries,
     datas=datas,

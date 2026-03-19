@@ -23,7 +23,15 @@ import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
 import { apiClient } from '@/lib/api/client';
 import type { StoryBatchCreateRequest, StoryVibeTubeRenderRequest } from '@/lib/api/types';
-import { LANGUAGE_OPTIONS } from '@/lib/constants/languages';
+import {
+  engineSupportsInstruct,
+  getEffectiveModelSize,
+  getGenerationModelOptions,
+  getGenerationModelSelection,
+  getLanguageOptionsForEngine,
+  getModelSelectionFromName,
+  type TTSEngine,
+} from '@/lib/constants/tts';
 import { useProfiles } from '@/lib/hooks/useProfiles';
 import { getPersistedVibeTubeRenderSettings } from '@/lib/utils/vibetubeSettings';
 import { useStoryStore } from '@/stores/storyStore';
@@ -33,7 +41,8 @@ interface BatchRow {
   profile_name: string;
   text: string;
   language: string;
-  model_size: '1.7B' | '0.6B';
+  engine: TTSEngine;
+  model_size: '1.7B' | '0.6B' | 'default';
   seed: string;
   instruct: string;
   showAdvanced: boolean;
@@ -50,6 +59,7 @@ function createRow(profileName = ''): BatchRow {
     profile_name: profileName,
     text: '',
     language: 'en',
+    engine: 'qwen',
     model_size: '1.7B',
     seed: '',
     instruct: '',
@@ -72,6 +82,7 @@ Rules:
         "profile_name": "Exact Voice Profile Name",
         "text": "Line to speak",
         "language": "en",
+        "engine": "qwen",
         "model_size": "1.7B",
         "seed": 42,
         "instruct": "optional delivery instructions"
@@ -84,9 +95,10 @@ Rules:
 - entries must be an array with at least one item.
 - profile_name must exactly match an existing voice profile name in the app.
 - text is required for every entry.
-- language can be one of: zh, en, ja, ko, de, fr, ru, pt, es, it.
-- model_size can be "1.7B" or "0.6B".
-- seed and instruct are optional.
+- language should match the selected engine.
+- engine can be qwen, luxtts, chatterbox, or chatterbox_turbo.
+- model_size is "1.7B" or "0.6B" for qwen, otherwise omit it or use "default".
+- seed is optional. instruct is only used by qwen.
 - Keep the story sequential. Do not add timing or track fields.
 
 Example:
@@ -99,12 +111,14 @@ Example:
       "profile_name": "Narrator",
       "text": "It was a cold night in the woods.",
       "language": "en",
+      "engine": "qwen",
       "model_size": "1.7B"
     },
     {
       "profile_name": "Wolf",
       "text": "Who's there?",
       "language": "en",
+      "engine": "qwen",
       "model_size": "1.7B",
       "instruct": "low and suspicious"
     }
@@ -132,6 +146,11 @@ export function StoryBatchCreateDialog({ open, onOpenChange }: StoryBatchCreateD
 
   const defaultProfileName = useMemo(
     () => (profiles?.length === 1 ? profiles[0].name : ''),
+    [profiles],
+  );
+  const profileLanguageByName = useMemo(
+    () =>
+      new Map((profiles ?? []).map((profile) => [profile.name.trim(), profile.language])),
     [profiles],
   );
 
@@ -207,15 +226,29 @@ export function StoryBatchCreateDialog({ open, onOpenChange }: StoryBatchCreateD
     setImportWarnings(warnings);
     setRows(
       parsed.entries.map((entry) => ({
+        ...(() => {
+          const language = entry.language;
+          const selection = getGenerationModelSelection(language, {
+            engine: entry.engine || 'qwen',
+            modelSize: getEffectiveModelSize(entry.engine || 'qwen', entry.model_size),
+          });
+          return {
+            language,
+            engine: selection.engine,
+            model_size: selection.modelSize,
+          };
+        })(),
         id: crypto.randomUUID(),
         profile_name: entry.profile_name,
         text: entry.text,
-        language: entry.language || 'en',
-        model_size: entry.model_size || '1.7B',
         seed: entry.seed !== undefined ? String(entry.seed) : '',
         instruct: entry.instruct || '',
         showAdvanced: Boolean(
-          entry.instruct || entry.seed !== undefined || entry.language || entry.model_size,
+          entry.instruct ||
+            entry.seed !== undefined ||
+            entry.language ||
+            entry.model_size ||
+            entry.engine,
         ),
       })),
     );
@@ -349,15 +382,22 @@ export function StoryBatchCreateDialog({ open, onOpenChange }: StoryBatchCreateD
           if (!profileId) {
             throw new Error(`Unknown voice profile "${profileName}"`);
           }
+          const selectedModel = getGenerationModelSelection(row.language, {
+            engine: row.engine,
+            modelSize: row.model_size,
+          });
 
           return {
             profileId,
             profileName,
             text: row.text.trim(),
-            language: row.language as (typeof LANGUAGE_OPTIONS)[number]['value'],
-            modelSize: row.model_size,
+            language: row.language,
+            engine: selectedModel.engine,
+            modelSize: selectedModel.modelSize,
             seed: row.seed.trim() ? Number(row.seed) : undefined,
-            instruct: row.instruct.trim() || undefined,
+            instruct: engineSupportsInstruct(selectedModel.engine)
+              ? row.instruct.trim() || undefined
+              : undefined,
           };
         });
 
@@ -369,6 +409,7 @@ export function StoryBatchCreateDialog({ open, onOpenChange }: StoryBatchCreateD
             profile_id: entry.profileId,
             text: entry.text,
             language: entry.language,
+            engine: entry.engine,
             model_size: entry.modelSize,
             seed: entry.seed,
             instruct: entry.instruct,
@@ -609,7 +650,19 @@ export function StoryBatchCreateDialog({ open, onOpenChange }: StoryBatchCreateD
                   <Label>Voice</Label>
                   <Select
                     value={row.profile_name}
-                    onValueChange={(value) => updateRow(row.id, { profile_name: value })}
+                    onValueChange={(value) => {
+                      const nextLanguage = profileLanguageByName.get(value.trim()) ?? row.language;
+                      const nextModel = getGenerationModelSelection(nextLanguage, {
+                        engine: row.engine,
+                        modelSize: row.model_size,
+                      });
+                      updateRow(row.id, {
+                        profile_name: value,
+                        language: nextLanguage,
+                        engine: nextModel.engine,
+                        model_size: nextModel.modelSize,
+                      });
+                    }}
                     disabled={isSubmitting}
                   >
                     <SelectTrigger>
@@ -642,14 +695,29 @@ export function StoryBatchCreateDialog({ open, onOpenChange }: StoryBatchCreateD
                     <Label>Language</Label>
                     <Select
                       value={row.language}
-                      onValueChange={(value) => updateRow(row.id, { language: value })}
+                      onValueChange={(value) => {
+                        const nextModel = getGenerationModelSelection(value, {
+                          engine: row.engine,
+                          modelSize: row.model_size,
+                        });
+                        updateRow(row.id, {
+                          language: value,
+                          engine: nextModel.engine,
+                          model_size: nextModel.modelSize,
+                        });
+                      }}
                       disabled={isSubmitting}
                     >
                       <SelectTrigger>
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {LANGUAGE_OPTIONS.map((option) => (
+                        {getLanguageOptionsForEngine(
+                          getGenerationModelSelection(row.language, {
+                            engine: row.engine,
+                            modelSize: row.model_size,
+                          }).engine,
+                        ).map((option) => (
                           <SelectItem key={option.value} value={option.value}>
                             {option.label}
                           </SelectItem>
@@ -661,18 +729,30 @@ export function StoryBatchCreateDialog({ open, onOpenChange }: StoryBatchCreateD
                   <div className="space-y-2">
                     <Label>Model</Label>
                     <Select
-                      value={row.model_size}
-                      onValueChange={(value: '1.7B' | '0.6B') =>
-                        updateRow(row.id, { model_size: value })
+                      value={
+                        getGenerationModelSelection(row.language, {
+                          engine: row.engine,
+                          modelSize: row.model_size,
+                        }).modelName
                       }
+                      onValueChange={(value) => {
+                        const nextModel = getModelSelectionFromName(value);
+                        updateRow(row.id, {
+                          engine: nextModel.engine,
+                          model_size: nextModel.modelSize,
+                        });
+                      }}
                       disabled={isSubmitting}
                     >
                       <SelectTrigger>
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="1.7B">Qwen3-TTS 1.7B</SelectItem>
-                        <SelectItem value="0.6B">Qwen3-TTS 0.6B</SelectItem>
+                        {getGenerationModelOptions(row.language).map((option) => (
+                          <SelectItem key={option.modelName} value={option.modelName}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </div>
@@ -689,16 +769,18 @@ export function StoryBatchCreateDialog({ open, onOpenChange }: StoryBatchCreateD
                     />
                   </div>
 
-                  <div className="space-y-2 md:col-span-4">
-                    <Label>Instructions</Label>
-                    <Textarea
-                      value={row.instruct}
-                      onChange={(e) => updateRow(row.id, { instruct: e.target.value })}
-                      disabled={isSubmitting}
-                      className="min-h-20"
-                      placeholder="Optional delivery instructions"
-                    />
-                  </div>
+                  {engineSupportsInstruct(row.engine) && (
+                    <div className="space-y-2 md:col-span-5">
+                      <Label>Instructions</Label>
+                      <Textarea
+                        value={row.instruct}
+                        onChange={(e) => updateRow(row.id, { instruct: e.target.value })}
+                        disabled={isSubmitting}
+                        className="min-h-20"
+                        placeholder="Optional delivery instructions"
+                      />
+                    </div>
+                  )}
                 </div>
               )}
             </div>

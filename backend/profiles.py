@@ -2,6 +2,7 @@
 Voice profile management module.
 """
 
+import asyncio
 from typing import List, Optional
 from datetime import datetime
 import uuid
@@ -23,7 +24,7 @@ from .database import (
     Generation as DBGeneration,
     StoryItem as DBStoryItem,
 )
-from .utils.audio import validate_reference_audio, load_audio, save_audio
+from .utils.audio import load_audio, save_audio, validate_and_load_reference_audio
 from .utils.images import validate_image, process_avatar
 from .utils.cache import _get_cache_dir, clear_profile_cache
 from .tts import get_tts_model
@@ -93,9 +94,12 @@ async def add_profile_sample(
     if not profile:
         raise ValueError(f"Profile {profile_id} not found")
     
-    # Validate audio
-    is_valid, error_msg = validate_reference_audio(audio_path)
-    if not is_valid:
+    # Validate and load audio once to avoid double decoding.
+    is_valid, error_msg, audio, sr = await asyncio.to_thread(
+        validate_and_load_reference_audio,
+        audio_path,
+    )
+    if not is_valid or audio is None or sr is None:
         raise ValueError(f"Invalid reference audio: {error_msg}")
     
     # Create sample ID and directory
@@ -105,7 +109,6 @@ async def add_profile_sample(
     
     # Copy audio file to profile directory
     dest_path = profile_dir / f"{sample_id}.wav"
-    audio, sr = load_audio(audio_path)
     save_audio(audio, str(dest_path), sr)
     
     # Create database entry
@@ -395,6 +398,7 @@ async def create_voice_prompt_for_profile(
     profile_id: str,
     db: Session,
     use_cache: bool = True,
+    engine: str = "qwen",
 ) -> dict:
     """
     Create a combined voice prompt from all samples in a profile.
@@ -413,7 +417,7 @@ async def create_voice_prompt_for_profile(
     if not samples:
         raise ValueError(f"No samples found for profile {profile_id}")
 
-    tts_model = get_tts_model()
+    tts_model = get_tts_model(engine)
 
     if len(samples) == 1:
         # Single sample - use directly

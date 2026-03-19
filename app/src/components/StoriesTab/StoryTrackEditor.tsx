@@ -186,21 +186,24 @@ export function StoryTrackEditor({ storyId, items }: StoryTrackEditorProps) {
   const isActiveStory = playbackStoryId === storyId;
   const isCurrentlyPlaying = isPlaying && isActiveStory;
 
-  // Auto-activate this story when the editor is shown so playhead is visible
+  // Keep the active story timeline in sync with clip edits and regenerations.
   useEffect(() => {
-    if (items.length > 0 && !isActiveStory) {
-      const totalDuration = Math.max(
-        ...items.map((item) => {
-          const trimStart = item.trim_start_ms || 0;
-          const trimEnd = item.trim_end_ms || 0;
-          const effectiveDuration = item.duration * 1000 - trimStart - trimEnd;
-          return item.start_time_ms + effectiveDuration;
-        }),
-        0,
-      );
-      setActiveStory(storyId, items, totalDuration);
+    if (items.length === 0) {
+      return;
     }
-  }, [storyId, items, isActiveStory, setActiveStory]);
+
+    const totalDuration = Math.max(
+      ...items.map((item) => {
+        const trimStart = item.trim_start_ms || 0;
+        const trimEnd = item.trim_end_ms || 0;
+        const effectiveDuration = item.duration * 1000 - trimStart - trimEnd;
+        return item.start_time_ms + effectiveDuration;
+      }),
+      0,
+    );
+
+    setActiveStory(storyId, items, totalDuration);
+  }, [storyId, items, setActiveStory]);
 
   // Sort items by start time for play
   const sortedItems = useMemo(() => {

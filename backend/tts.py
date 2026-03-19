@@ -1,28 +1,22 @@
-"""
-TTS inference module - delegates to backend abstraction layer.
-"""
+"""TTS inference module - delegates to backend abstraction layer."""
 
-from typing import Optional
 import numpy as np
 import io
 import soundfile as sf
 
-from .backends import get_tts_backend, TTSBackend
+from .backends import TTSBackend, get_tts_backend, get_tts_backend_for_engine
 
 
-def get_tts_model() -> TTSBackend:
-    """
-    Get TTS backend instance (MLX or PyTorch based on platform).
-    
-    Returns:
-        TTS backend instance
-    """
-    return get_tts_backend()
+def get_tts_model(engine: str = "qwen") -> TTSBackend:
+    """Get a TTS backend instance for the requested engine."""
+    if engine == "qwen":
+        return get_tts_backend()
+    return get_tts_backend_for_engine(engine)
 
 
-def unload_tts_model():
-    """Unload TTS model to free memory."""
-    backend = get_tts_backend()
+def unload_tts_model(engine: str = "qwen"):
+    """Unload a TTS model to free memory."""
+    backend = get_tts_model(engine)
     backend.unload_model()
 
 

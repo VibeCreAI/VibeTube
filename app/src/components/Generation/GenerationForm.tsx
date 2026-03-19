@@ -13,6 +13,13 @@ import {
 } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import {
+  engineSupportsInstruct,
+  getGenerationModelOptions,
+  getGenerationModelSelection,
+  getLanguageOptionsForEngine,
+  getModelSelectionFromName,
+} from '@/lib/constants/tts';
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -20,26 +27,47 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { LANGUAGE_OPTIONS } from '@/lib/constants/languages';
 import { useGenerationForm } from '@/lib/hooks/useGenerationForm';
 import { useProfile } from '@/lib/hooks/useProfiles';
 import { useUIStore } from '@/stores/uiStore';
+import type { LanguageCode } from '@/lib/constants/languages';
 
 export function GenerationForm() {
   const selectedProfileId = useUIStore((state) => state.selectedProfileId);
   const { data: selectedProfile } = useProfile(selectedProfileId || '');
 
   const { form, handleSubmit, isPending, statusMessage } = useGenerationForm();
+  const selectedLanguage = form.watch('language');
+  const selectedModel = getGenerationModelSelection(selectedLanguage, {
+    engine: form.watch('engine'),
+    modelSize: form.watch('modelSize'),
+  });
+  const languageOptions = getLanguageOptionsForEngine(selectedModel.engine);
+  const supportsInstruct = engineSupportsInstruct(selectedModel.engine);
+  const modelOptions = getGenerationModelOptions(selectedLanguage);
 
   useEffect(() => {
     if (!selectedProfile?.language) {
       return;
     }
-    form.setValue('language', selectedProfile.language, {
+    const nextLanguage = selectedProfile.language as LanguageCode;
+    const nextModel = getGenerationModelSelection(nextLanguage, {
+      engine: selectedModel.engine,
+      modelSize: selectedModel.modelSize,
+    });
+    form.setValue('language', nextLanguage, {
       shouldDirty: true,
       shouldValidate: true,
     });
-  }, [form, selectedProfile?.id, selectedProfile?.language]);
+    form.setValue('engine', nextModel.engine, {
+      shouldDirty: true,
+      shouldValidate: true,
+    });
+    form.setValue('modelSize', nextModel.modelSize, {
+      shouldDirty: true,
+      shouldValidate: true,
+    });
+  }, [form, selectedModel.engine, selectedModel.modelSize, selectedProfile?.id, selectedProfile?.language]);
 
   async function onSubmit(data: Parameters<typeof handleSubmit>[0]) {
     await handleSubmit(data, selectedProfileId);
@@ -87,29 +115,32 @@ export function GenerationForm() {
               )}
             />
 
-            <FormField
-              control={form.control}
-              name="instruct"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Delivery Instructions (optional)</FormLabel>
-                  <FormControl>
-                    <Textarea
-                      placeholder="e.g. Speak slowly with emphasis, Warm and friendly tone, Professional and authoritative..."
-                      className="min-h-[80px]"
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormDescription>
-                    Natural language instructions to control speech delivery (tone, emotion, pace).
-                    Max 500 characters
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+            {supportsInstruct && (
+              <FormField
+                control={form.control}
+                name="instruct"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Delivery Instructions (optional)</FormLabel>
+                    <FormControl>
+                      <Textarea
+                        placeholder="e.g. Speak slowly with emphasis, Warm and friendly tone, Professional and authoritative..."
+                        className="min-h-[80px]"
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      Natural language instructions to control speech delivery (tone, emotion,
+                      pace). Max 500 characters
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
 
             <div className="grid gap-4 md:grid-cols-3">
+
               <FormField
                 control={form.control}
                 name="language"
@@ -123,7 +154,7 @@ export function GenerationForm() {
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        {LANGUAGE_OPTIONS.map((lang) => (
+                        {languageOptions.map((lang) => (
                           <SelectItem key={lang.value} value={lang.value}>
                             {lang.label}
                           </SelectItem>
@@ -137,22 +168,40 @@ export function GenerationForm() {
 
               <FormField
                 control={form.control}
-                name="modelSize"
-                render={({ field }) => (
+                name="engine"
+                render={() => (
                   <FormItem>
-                    <FormLabel>Model Size</FormLabel>
-                    <Select value={field.value} onValueChange={field.onChange}>
+                    <FormLabel>Model</FormLabel>
+                    <Select
+                      value={selectedModel.modelName}
+                      onValueChange={(value) => {
+                        const nextModel = getModelSelectionFromName(value);
+                        form.setValue('engine', nextModel.engine, {
+                          shouldDirty: true,
+                          shouldValidate: true,
+                        });
+                        form.setValue('modelSize', nextModel.modelSize, {
+                          shouldDirty: true,
+                          shouldValidate: true,
+                        });
+                      }}
+                    >
                       <FormControl>
                         <SelectTrigger>
                           <SelectValue />
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        <SelectItem value="1.7B">Qwen TTS 1.7B (Higher Quality)</SelectItem>
-                        <SelectItem value="0.6B">Qwen TTS 0.6B (Faster)</SelectItem>
+                        {modelOptions.map((option) => (
+                          <SelectItem key={option.modelName} value={option.modelName}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
-                    <FormDescription>Larger models produce better quality</FormDescription>
+                    <FormDescription>
+                      Only models that support the selected language are shown.
+                    </FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}

@@ -25,7 +25,16 @@ import type {
   StoryItemRegenerateRequest,
   VoiceProfileResponse,
 } from '@/lib/api/types';
-import { LANGUAGE_OPTIONS, type LanguageCode } from '@/lib/constants/languages';
+import { type LanguageCode } from '@/lib/constants/languages';
+import {
+  engineSupportsInstruct,
+  getGenerationModelOptions,
+  getGenerationModelSelection,
+  getLanguageOptionsForEngine,
+  getModelSelectionFromName,
+  getEffectiveModelSize,
+  type TTSEngine,
+} from '@/lib/constants/tts';
 import { StoryVoiceRecordingForm } from './StoryVoiceRecordingForm';
 
 interface StoryRegenerateDialogProps {
@@ -48,17 +57,25 @@ interface FormState {
   profileId: string;
   text: string;
   language: LanguageCode;
-  modelSize: '1.7B' | '0.6B';
+  engine: TTSEngine;
+  modelSize: '1.7B' | '0.6B' | 'default';
   seed: string;
   instruct: string;
 }
 
 function buildFormState(item: StoryItemDetail | null): FormState {
+  const engine = item?.engine || 'qwen';
+  const language = (item?.language as LanguageCode) || 'en';
+  const selection = getGenerationModelSelection(language, {
+    engine,
+    modelSize: getEffectiveModelSize(engine, item?.model_size),
+  });
   return {
     profileId: item?.profile_id || '',
     text: item?.text || '',
-    language: (item?.language as LanguageCode) || 'en',
-    modelSize: '1.7B',
+    language,
+    engine: selection.engine,
+    modelSize: selection.modelSize,
     seed: '',
     instruct: item?.instruct || '',
   };
@@ -77,6 +94,13 @@ export function StoryRegenerateDialog({
   const [formState, setFormState] = useState<FormState>(() => buildFormState(item));
   const [mode, setMode] = useState<'generate' | 'record'>('generate');
   const selectedProfile = profiles.find((profile) => profile.id === formState.profileId);
+  const selectedModel = getGenerationModelSelection(formState.language, {
+    engine: formState.engine,
+    modelSize: formState.modelSize,
+  });
+  const languageOptions = getLanguageOptionsForEngine(selectedModel.engine);
+  const modelOptions = getGenerationModelOptions(formState.language);
+  const supportsInstruct = engineSupportsInstruct(selectedModel.engine);
 
   useEffect(() => {
     if (open) {
@@ -89,20 +113,47 @@ export function StoryRegenerateDialog({
     if (!open || !selectedProfile?.language) {
       return;
     }
+    const nextLanguage = selectedProfile.language as LanguageCode;
+    const nextModel = getGenerationModelSelection(nextLanguage, {
+      engine: formState.engine,
+      modelSize: formState.modelSize,
+    });
     setFormState((prev) => ({
       ...prev,
-      language: selectedProfile.language as LanguageCode,
+      language: nextLanguage,
+      engine: nextModel.engine,
+      modelSize: nextModel.modelSize,
     }));
-  }, [open, selectedProfile?.id, selectedProfile?.language]);
+  }, [formState.engine, formState.modelSize, open, selectedProfile?.id, selectedProfile?.language]);
+
+  useEffect(() => {
+    const nextModel = getGenerationModelSelection(formState.language, {
+      engine: formState.engine,
+      modelSize: formState.modelSize,
+    });
+    if (nextModel.engine === formState.engine && nextModel.modelSize === formState.modelSize) {
+      return;
+    }
+    setFormState((prev) => ({
+      ...prev,
+      engine: nextModel.engine,
+      modelSize: nextModel.modelSize,
+    }));
+  }, [formState.engine, formState.language, formState.modelSize]);
 
   const handleSubmit = () => {
+    const nextModel = getGenerationModelSelection(formState.language, {
+      engine: formState.engine,
+      modelSize: formState.modelSize,
+    });
     onSubmit({
       profile_id: formState.profileId,
       text: formState.text.trim(),
       language: formState.language,
-      model_size: formState.modelSize,
+      engine: nextModel.engine,
+      model_size: nextModel.modelSize,
       seed: formState.seed.trim() ? Number(formState.seed) : undefined,
-      instruct: formState.instruct.trim() || undefined,
+      instruct: engineSupportsInstruct(nextModel.engine) ? formState.instruct.trim() || undefined : undefined,
     });
   };
 
@@ -129,7 +180,7 @@ export function StoryRegenerateDialog({
 
           {mode === 'generate' ? (
             <>
-              <div className="grid gap-4 md:grid-cols-2">
+              <div className="grid gap-4 md:grid-cols-3">
                 <div className="space-y-2">
                   <Label>Voice</Label>
                   <Select
@@ -156,17 +207,53 @@ export function StoryRegenerateDialog({
                   <Label>Language</Label>
                   <Select
                     value={formState.language}
-                    onValueChange={(value: LanguageCode) =>
-                      setFormState((prev) => ({ ...prev, language: value }))
-                    }
+                    onValueChange={(value: LanguageCode) => {
+                      const nextModel = getGenerationModelSelection(value, {
+                        engine: formState.engine,
+                        modelSize: formState.modelSize,
+                      });
+                      setFormState((prev) => ({
+                        ...prev,
+                        language: value,
+                        engine: nextModel.engine,
+                        modelSize: nextModel.modelSize,
+                      }));
+                    }}
                     disabled={isSubmitting}
                   >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {LANGUAGE_OPTIONS.map((option) => (
+                      {languageOptions.map((option) => (
                         <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Model</Label>
+                  <Select
+                    value={selectedModel.modelName}
+                    onValueChange={(value) => {
+                      const nextModel = getModelSelectionFromName(value);
+                      setFormState((prev) => ({
+                        ...prev,
+                        engine: nextModel.engine,
+                        modelSize: nextModel.modelSize,
+                      }));
+                    }}
+                    disabled={isSubmitting}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {modelOptions.map((option) => (
+                        <SelectItem key={option.modelName} value={option.modelName}>
                           {option.label}
                         </SelectItem>
                       ))}
@@ -185,26 +272,7 @@ export function StoryRegenerateDialog({
                 />
               </div>
 
-              <div className="grid gap-4 md:grid-cols-3">
-                <div className="space-y-2">
-                  <Label>Model</Label>
-                  <Select
-                    value={formState.modelSize}
-                    onValueChange={(value: '1.7B' | '0.6B') =>
-                      setFormState((prev) => ({ ...prev, modelSize: value }))
-                    }
-                    disabled={isSubmitting}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="1.7B">Qwen3-TTS 1.7B</SelectItem>
-                      <SelectItem value="0.6B">Qwen3-TTS 0.6B</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
+              <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
                   <Label>Seed</Label>
                   <Input
@@ -241,18 +309,20 @@ export function StoryRegenerateDialog({
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <Label>Instructions</Label>
-                <Textarea
-                  value={formState.instruct}
-                  onChange={(e) =>
-                    setFormState((prev) => ({ ...prev, instruct: e.target.value }))
-                  }
-                  disabled={isSubmitting}
-                  className="min-h-20"
-                  placeholder="Optional delivery instructions"
-                />
-              </div>
+              {supportsInstruct && (
+                <div className="space-y-2">
+                  <Label>Instructions</Label>
+                  <Textarea
+                    value={formState.instruct}
+                    onChange={(e) =>
+                      setFormState((prev) => ({ ...prev, instruct: e.target.value }))
+                    }
+                    disabled={isSubmitting}
+                    className="min-h-20"
+                    placeholder="Optional delivery instructions"
+                  />
+                </div>
+              )}
             </>
           ) : (
             <StoryVoiceRecordingForm

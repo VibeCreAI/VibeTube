@@ -12,6 +12,43 @@ use tokio::sync::mpsc;
 const LEGACY_PORT: u16 = 8000;
 const SERVER_PORT: u16 = 17493;
 
+/// Find a vibetube-server process listening on a given port (Windows only).
+///
+/// Uses PowerShell `Get-NetTCPConnection` to resolve the owning PID and then
+/// verifies with `tasklist` that the process belongs to VibeTube. This avoids
+/// relying on `netstat.exe` during startup detection.
+#[cfg(windows)]
+fn find_vibetube_pid_on_port(port: u16) -> Option<u32> {
+    use std::process::Command;
+
+    let ps_script = format!(
+        "Get-NetTCPConnection -LocalPort {} -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess",
+        port
+    );
+
+    if let Ok(output) = Command::new("powershell")
+        .args(["-NoProfile", "-Command", &ps_script])
+        .output()
+    {
+        let output_str = String::from_utf8_lossy(&output.stdout);
+        for line in output_str.lines() {
+            if let Ok(pid) = line.trim().parse::<u32>() {
+                if let Ok(tasklist_output) = Command::new("tasklist")
+                    .args(["/FI", &format!("PID eq {}", pid), "/FO", "CSV", "/NH"])
+                    .output()
+                {
+                    let tasklist_str = String::from_utf8_lossy(&tasklist_output.stdout);
+                    if tasklist_str.to_lowercase().contains("vibetube") {
+                        return Some(pid);
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
 struct ServerState {
     child: Mutex<Option<tauri_plugin_shell::process::CommandChild>>,
     server_pid: Mutex<Option<u32>>,
@@ -61,28 +98,26 @@ async fn start_server(
 
     #[cfg(windows)]
     {
-        use std::process::Command;
-        if let Ok(output) = Command::new("netstat").args(["-ano"]).output() {
-            let output_str = String::from_utf8_lossy(&output.stdout);
-            for line in output_str.lines() {
-                if line.contains(&format!(":{}", SERVER_PORT)) && line.contains("LISTENING") {
-                    if let Some(pid_str) = line.split_whitespace().last() {
-                        if let Ok(pid) = pid_str.parse::<u32>() {
-                            if let Ok(tasklist_output) = Command::new("tasklist")
-                                .args(["/FI", &format!("PID eq {}", pid), "/FO", "CSV", "/NH"])
-                                .output()
-                            {
-                                let tasklist_str = String::from_utf8_lossy(&tasklist_output.stdout);
-                                if tasklist_str.to_lowercase().contains("vibetube") {
-                                    println!("Found existing vibetube-server on port {} (PID: {}), reusing it", SERVER_PORT, pid);
-                                    track_server_process(&state, pid);
-                                    return Ok(format!("http://127.0.0.1:{}", SERVER_PORT));
-                                }
-                            }
-                        }
-                    }
-                }
+        use std::net::TcpStream;
+        if TcpStream::connect_timeout(
+            &format!("127.0.0.1:{}", SERVER_PORT).parse().unwrap(),
+            std::time::Duration::from_secs(1),
+        )
+        .is_ok()
+        {
+            if let Some(pid) = find_vibetube_pid_on_port(SERVER_PORT) {
+                println!(
+                    "Found existing vibetube-server on port {} (PID: {}), reusing it",
+                    SERVER_PORT, pid
+                );
+                track_server_process(&state, pid);
+                return Ok(format!("http://127.0.0.1:{}", SERVER_PORT));
             }
+
+            return Err(format!(
+                "Port {} is already in use by another application. Close it or restart VibeTube.",
+                SERVER_PORT
+            ));
         }
     }
 
@@ -125,32 +160,22 @@ async fn start_server(
 
     #[cfg(windows)]
     {
+        use std::net::TcpStream;
         use std::process::Command;
-        // On Windows, find PIDs on legacy port 8000, then check their names
-        if let Ok(output) = Command::new("netstat").args(["-ano"]).output() {
-            let output_str = String::from_utf8_lossy(&output.stdout);
-            for line in output_str.lines() {
-                if line.contains(&format!(":{}", LEGACY_PORT)) && line.contains("LISTENING") {
-                    if let Some(pid_str) = line.split_whitespace().last() {
-                        if let Ok(pid) = pid_str.parse::<u32>() {
-                            // Get process name for this PID
-                            if let Ok(tasklist_output) = Command::new("tasklist")
-                                .args(["/FI", &format!("PID eq {}", pid), "/FO", "CSV", "/NH"])
-                                .output()
-                            {
-                                let tasklist_str = String::from_utf8_lossy(&tasklist_output.stdout);
-                                if tasklist_str.to_lowercase().contains("vibetube") {
-                                    println!("Found orphaned vibetube-server on legacy port {} (PID: {}), killing it...", LEGACY_PORT, pid);
-                                    let _ = Command::new("taskkill")
-                                        .args(["/PID", &pid.to_string(), "/T", "/F"])
-                                        .output();
-                                } else {
-                                    println!("Legacy port {} is in use by non-vibetube process (PID: {}), not killing", LEGACY_PORT, pid);
-                                }
-                            }
-                        }
-                    }
-                }
+        if TcpStream::connect_timeout(
+            &format!("127.0.0.1:{}", LEGACY_PORT).parse().unwrap(),
+            std::time::Duration::from_secs(1),
+        )
+        .is_ok()
+        {
+            if let Some(pid) = find_vibetube_pid_on_port(LEGACY_PORT) {
+                println!(
+                    "Found orphaned vibetube-server on legacy port {} (PID: {}), killing it...",
+                    LEGACY_PORT, pid
+                );
+                let _ = Command::new("taskkill")
+                    .args(["/PID", &pid.to_string(), "/T", "/F"])
+                    .output();
             }
         }
     }
@@ -572,14 +597,20 @@ fn list_windows_process_ids_by_image(image_name: &str) -> Vec<u32> {
 #[cfg(windows)]
 fn find_windows_listening_pids(port: u16) -> Vec<u32> {
     use std::process::Command;
-    let Ok(output) = Command::new("netstat").args(["-ano"]).output() else {
+    let ps_script = format!(
+        "Get-NetTCPConnection -LocalPort {} -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess",
+        port
+    );
+    let Ok(output) = Command::new("powershell")
+        .args(["-NoProfile", "-Command", &ps_script])
+        .output()
+    else {
         return Vec::new();
     };
 
     String::from_utf8_lossy(&output.stdout)
         .lines()
-        .filter(|line| line.contains(&format!(":{}", port)) && line.contains("LISTENING"))
-        .filter_map(|line| line.split_whitespace().last()?.parse::<u32>().ok())
+        .filter_map(|line| line.trim().parse::<u32>().ok())
         .collect()
 }
 

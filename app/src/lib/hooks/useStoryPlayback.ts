@@ -209,11 +209,25 @@ export function useStoryPlayback(items: StoryItemDetail[] | undefined) {
 
       // Find all items that should be playing
       const shouldBePlaying = findActiveItems(storyTimeMs, itemList);
-      const shouldBePlayingIds = new Set(shouldBePlaying.map((item) => item.id));
+      const shouldBePlayingById = new Map(shouldBePlaying.map((item) => [item.id, item]));
 
       // Stop sources that shouldn't be playing anymore
-      for (const [itemId] of activeSourcesRef.current) {
-        if (!shouldBePlayingIds.has(itemId)) {
+      for (const [itemId, activeSource] of activeSourcesRef.current) {
+        const currentItem = shouldBePlayingById.get(itemId);
+        if (!currentItem) {
+          stopSource(itemId);
+          continue;
+        }
+
+        const currentBuffer = audioBuffersRef.current.get(currentItem.generation_id);
+        const currentEndTimeMs =
+          currentItem.start_time_ms + getEffectiveDurationMs(currentItem, currentBuffer);
+
+        if (
+          activeSource.generationId !== currentItem.generation_id ||
+          activeSource.startTimeMs !== currentItem.start_time_ms ||
+          activeSource.endTimeMs !== currentEndTimeMs
+        ) {
           stopSource(itemId);
         }
       }

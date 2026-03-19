@@ -17,7 +17,13 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
 import { apiClient } from '@/lib/api/client';
-import { SUPPORTED_LANGUAGES } from '@/lib/constants/languages';
+import { getLanguageLabel, type LanguageCode } from '@/lib/constants/languages';
+import {
+  engineSupportsInstruct,
+  getGenerationModelOptions,
+  getGenerationModelSelection,
+  getModelSelectionFromName,
+} from '@/lib/constants/tts';
 import { useGenerationForm } from '@/lib/hooks/useGenerationForm';
 import { useProfile, useProfiles } from '@/lib/hooks/useProfiles';
 import { useAddStoryItem, useStory } from '@/lib/hooks/useStories';
@@ -152,6 +158,13 @@ export function FloatingGenerateBox({
       }
     },
   });
+  const selectedLanguage = form.watch('language');
+  const selectedModel = getGenerationModelSelection(selectedLanguage, {
+    engine: form.watch('engine'),
+    modelSize: form.watch('modelSize'),
+  });
+  const supportsInstruct = engineSupportsInstruct(selectedModel.engine);
+  const modelOptions = getGenerationModelOptions(selectedLanguage);
 
   // Click away handler to collapse the box
   useEffect(() => {
@@ -194,11 +207,30 @@ export function FloatingGenerateBox({
     if (!selectedProfile?.language) {
       return;
     }
-    form.setValue('language', selectedProfile.language, {
+    const nextLanguage = selectedProfile.language as LanguageCode;
+    const nextModel = getGenerationModelSelection(nextLanguage, {
+      engine: selectedModel.engine,
+      modelSize: selectedModel.modelSize,
+    });
+    form.setValue('language', nextLanguage, {
       shouldDirty: true,
       shouldValidate: true,
     });
-  }, [form, selectedProfile?.id, selectedProfile?.language]);
+    form.setValue('engine', nextModel.engine, {
+      shouldDirty: true,
+      shouldValidate: true,
+    });
+    form.setValue('modelSize', nextModel.modelSize, {
+      shouldDirty: true,
+      shouldValidate: true,
+    });
+  }, [form, selectedModel.engine, selectedModel.modelSize, selectedProfile?.id, selectedProfile?.language]);
+
+  useEffect(() => {
+    if (!supportsInstruct && isInstructMode) {
+      setIsInstructMode(false);
+    }
+  }, [isInstructMode, supportsInstruct]);
 
   // Auto-resize textarea based on content (only when expanded)
   useEffect(() => {
@@ -413,7 +445,7 @@ export function FloatingGenerateBox({
                   </span>
                 </div>
                 <AnimatePresence>
-                  {isExpanded && (
+                  {isExpanded && supportsInstruct && (
                     <motion.div
                       initial={{ opacity: 0, scale: 0.8 }}
                       animate={{ opacity: 1, scale: 1 }}
@@ -483,7 +515,7 @@ export function FloatingGenerateBox({
                                 {selectedProfile.name}
                               </span>
                               <span className="shrink-0 rounded-full border border-accent/25 px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                                {SUPPORTED_LANGUAGES[selectedProfile.language]}
+                                {getLanguageLabel(selectedProfile.language)}
                               </span>
                             </div>
                           ) : (
@@ -497,7 +529,7 @@ export function FloatingGenerateBox({
                             <div className="flex min-w-0 items-center justify-between gap-3">
                               <span className="truncate">{profile.name}</span>
                               <span className="shrink-0 text-[10px] text-muted-foreground">
-                                {SUPPORTED_LANGUAGES[profile.language]}
+                                {getLanguageLabel(profile.language)}
                               </span>
                             </div>
                           </SelectItem>
@@ -508,22 +540,38 @@ export function FloatingGenerateBox({
 
                   <FormField
                     control={form.control}
-                    name="modelSize"
-                    render={({ field }) => (
+                    name="engine"
+                    render={() => (
                       <FormItem className="flex-1 space-y-0">
-                        <Select value={field.value} onValueChange={field.onChange}>
+                        <Select
+                          value={selectedModel.modelName}
+                          onValueChange={(value) => {
+                            const nextModel = getModelSelectionFromName(value);
+                            form.setValue('engine', nextModel.engine, {
+                              shouldDirty: true,
+                              shouldValidate: true,
+                            });
+                            form.setValue('modelSize', nextModel.modelSize, {
+                              shouldDirty: true,
+                              shouldValidate: true,
+                            });
+                          }}
+                        >
                           <FormControl>
                             <SelectTrigger className="h-8 text-xs bg-card border-border rounded-full hover:bg-background/50 transition-all">
                               <SelectValue />
                             </SelectTrigger>
                           </FormControl>
                           <SelectContent>
-                            <SelectItem value="1.7B" className="text-xs text-muted-foreground">
-                              Qwen3-TTS 1.7B
-                            </SelectItem>
-                            <SelectItem value="0.6B" className="text-xs text-muted-foreground">
-                              Qwen3-TTS 0.6B
-                            </SelectItem>
+                            {modelOptions.map((option) => (
+                              <SelectItem
+                                key={option.modelName}
+                                value={option.modelName}
+                                className="text-xs text-muted-foreground"
+                              >
+                                {option.label}
+                              </SelectItem>
+                            ))}
                           </SelectContent>
                         </Select>
                         <FormMessage className="text-xs" />

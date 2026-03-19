@@ -7,6 +7,7 @@ import json
 import time
 from typing import List, Dict
 import logging
+import pytest
 
 # Set up logging to see what's happening
 logging.basicConfig(
@@ -16,6 +17,9 @@ logging.basicConfig(
 
 from utils.progress import ProgressManager, get_progress_manager
 from utils.hf_progress import HFProgressTracker, create_hf_progress_callback
+
+
+pytestmark = pytest.mark.asyncio
 
 
 def test_progress_manager_basic():
@@ -139,10 +143,10 @@ def test_hf_progress_tracker():
 
             # Simulate downloading a file
             print("  Simulating download with tqdm...")
-            total_size = 1000
+            total_size = 2_000_000
             with tqdm(total=total_size, desc="model.bin", unit="B", unit_scale=True) as pbar:
-                for chunk in range(0, total_size, 100):
-                    pbar.update(100)
+                for chunk in range(0, total_size, 200_000):
+                    pbar.update(200_000)
                     time.sleep(0.01)
 
             print(f"  Captured {len(captured_progress)} progress updates")
@@ -209,16 +213,16 @@ async def test_full_integration():
 
                 # Simulate multi-file download (like HuggingFace does)
                 files = [
-                    ("model.safetensors", 5000),
-                    ("config.json", 1000),
-                    ("tokenizer.json", 500),
+                    ("model.safetensors", 2_000_000),
+                    ("config.json", 200_000),
+                    ("tokenizer.json", 100_000),
                 ]
 
                 for filename, size in files:
                     print(f"  Backend: Downloading {filename}...")
                     with tqdm(total=size, desc=filename, unit="B") as pbar:
-                        for chunk in range(0, size, 500):
-                            chunk_size = min(500, size - chunk)
+                        for chunk in range(0, size, 200_000):
+                            chunk_size = min(200_000, size - chunk)
                             pbar.update(chunk_size)
                             await asyncio.sleep(0.05)
 

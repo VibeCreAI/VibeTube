@@ -138,15 +138,19 @@ export const useStoryStore = create<StoryPlaybackState>((set, get) => ({
 
   setActiveStory: (storyId, items, totalDurationMs) => {
     const currentState = get();
-    // Only update if switching to a different story
-    if (currentState.playbackStoryId !== storyId) {
-      set({
-        playbackStoryId: storyId,
-        playbackItems: items,
-        totalDurationMs,
-        currentTimeMs: 0,
-        isPlaying: false,
-      });
-    }
+    const isSameStory = currentState.playbackStoryId === storyId;
+    const nextCurrentTimeMs = isSameStory
+      ? Math.max(0, Math.min(currentState.currentTimeMs, totalDurationMs))
+      : 0;
+
+    set({
+      playbackStoryId: storyId,
+      playbackItems: items,
+      totalDurationMs,
+      currentTimeMs: nextCurrentTimeMs,
+      isPlaying: isSameStory ? currentState.isPlaying : false,
+      playbackStartContextTime: isSameStory ? currentState.playbackStartContextTime : null,
+      playbackStartStoryTime: isSameStory ? currentState.playbackStartStoryTime : null,
+    });
   },
 }));

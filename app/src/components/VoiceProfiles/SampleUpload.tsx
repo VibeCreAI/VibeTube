@@ -83,6 +83,7 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
   const selectedFile = form.watch('file');
   const recordingLanguage = (profile?.language as LanguageCode) || 'en';
   const shouldShowTranscriptionControls = mode !== 'record' || recordingPromptMode === 'custom';
+  const shouldShowReferenceTextField = mode !== 'record' || recordingPromptMode !== 'script';
 
   const {
     isRecording,
@@ -396,24 +397,25 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
               </p>
             )}
 
-            <FormField
-              control={form.control}
-              name="referenceText"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Reference Text</FormLabel>
-                  <FormControl>
-                    <Textarea
-                      placeholder="Enter the exact text spoken in the audio..."
-                      className="min-h-[100px]"
-                      readOnly={mode === 'record' && recordingPromptMode === 'script'}
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+            {shouldShowReferenceTextField && (
+              <FormField
+                control={form.control}
+                name="referenceText"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Reference Text</FormLabel>
+                    <FormControl>
+                      <Textarea
+                        placeholder="Enter the exact text spoken in the audio..."
+                        className="min-h-[100px]"
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
 
             <div className="flex gap-2 justify-end">
               <Button type="button" variant="outline" onClick={() => handleOpenChange(false)}>

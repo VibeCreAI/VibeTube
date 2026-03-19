@@ -13,8 +13,16 @@ class DummyWhisperModel:
         self.model_size = "base"
         self.calls = []
 
-    async def transcribe(self, audio_path: str, language: str | None):
-        self.calls.append((audio_path, language))
+    def _is_model_cached(self, model_size: str) -> bool:
+        return True
+
+    async def transcribe(
+        self,
+        audio_path: str,
+        language: str | None = None,
+        model_size: str | None = None,
+    ):
+        self.calls.append((audio_path, language, model_size))
         return "stub transcript"
 
 
@@ -33,11 +41,8 @@ def _make_upload_file() -> UploadFile:
 
 def test_transcribe_endpoint_omits_language_for_auto_detect(monkeypatch, tmp_path):
     dummy_model = DummyWhisperModel()
-    repo_cache = tmp_path / "models--openai--whisper-base"
-    repo_cache.mkdir(parents=True)
 
     monkeypatch.setattr(main.transcribe, "get_whisper_model", lambda: dummy_model)
-    monkeypatch.setattr("huggingface_hub.constants.HF_HUB_CACHE", str(tmp_path))
     monkeypatch.setattr("backend.utils.audio.load_audio", lambda *_args, **_kwargs: (np.zeros(16000), 16000))
 
     response = asyncio.run(main.transcribe_audio(file=_make_upload_file(), language=None))
@@ -45,15 +50,13 @@ def test_transcribe_endpoint_omits_language_for_auto_detect(monkeypatch, tmp_pat
     assert response.text == "stub transcript"
     assert response.duration == 1.0
     assert dummy_model.calls[0][1] is None
+    assert dummy_model.calls[0][2] == "base"
 
 
 def test_transcribe_endpoint_forwards_explicit_language(monkeypatch, tmp_path):
     dummy_model = DummyWhisperModel()
-    repo_cache = tmp_path / "models--openai--whisper-base"
-    repo_cache.mkdir(parents=True)
 
     monkeypatch.setattr(main.transcribe, "get_whisper_model", lambda: dummy_model)
-    monkeypatch.setattr("huggingface_hub.constants.HF_HUB_CACHE", str(tmp_path))
     monkeypatch.setattr("backend.utils.audio.load_audio", lambda *_args, **_kwargs: (np.zeros(8000), 16000))
 
     response = asyncio.run(main.transcribe_audio(file=_make_upload_file(), language="ko"))
@@ -61,6 +64,21 @@ def test_transcribe_endpoint_forwards_explicit_language(monkeypatch, tmp_path):
     assert response.text == "stub transcript"
     assert response.duration == 0.5
     assert dummy_model.calls[0][1] == "ko"
+    assert dummy_model.calls[0][2] == "base"
+
+
+def test_transcribe_endpoint_forwards_explicit_model(monkeypatch):
+    dummy_model = DummyWhisperModel()
+
+    monkeypatch.setattr(main.transcribe, "get_whisper_model", lambda: dummy_model)
+    monkeypatch.setattr("backend.utils.audio.load_audio", lambda *_args, **_kwargs: (np.zeros(32000), 16000))
+
+    response = asyncio.run(main.transcribe_audio(file=_make_upload_file(), language="en", model="turbo"))
+
+    assert response.text == "stub transcript"
+    assert response.duration == 2.0
+    assert dummy_model.calls[0][1] == "en"
+    assert dummy_model.calls[0][2] == "turbo"
 
 
 def test_mlx_transcribe_uses_transcribe_task(monkeypatch):

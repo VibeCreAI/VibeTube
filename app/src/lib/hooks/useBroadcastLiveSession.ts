@@ -103,6 +103,7 @@ export function useBroadcastLiveSession({
 }: UseBroadcastLiveSessionOptions) {
   const [isLive, setIsLive] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [activeStream, setActiveStream] = useState<MediaStream | null>(null);
   const [stageState, setStageState] = useState<BroadcastStageState>(() =>
     createIdleBroadcastStageState(assets, profileId, profileName, settings.show_profile_names),
   );
@@ -168,6 +169,7 @@ export function useBroadcastLiveSession({
       streamRef.current?.getTracks().forEach((track) => track.stop());
     }
     streamRef.current = null;
+    setActiveStream(null);
     ownsStreamRef.current = false;
 
     sourceRef.current?.disconnect();
@@ -235,6 +237,7 @@ export function useBroadcastLiveSession({
       source.connect(analyser);
 
       streamRef.current = stream;
+      setActiveStream(stream);
       ownsStreamRef.current = ownsStream;
       audioContextRef.current = audioContext;
       analyserRef.current = analyser;
@@ -432,6 +435,7 @@ export function useBroadcastLiveSession({
   return {
     isLive,
     error,
+    activeStream,
     stageState,
     startLive,
     stopLive,

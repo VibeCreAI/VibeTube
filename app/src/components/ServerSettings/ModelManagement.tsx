@@ -164,7 +164,7 @@ export function ModelManagement() {
               </h3>
               <div className="space-y-2">
                 {modelStatus.models
-                  .filter((m) => m.model_name.startsWith('qwen-tts'))
+                  .filter((m) => m.engine && m.engine !== 'whisper')
                   .map((model) => (
                     <ModelItem
                       key={model.model_name}
@@ -264,6 +264,8 @@ interface ModelItemProps {
   model: {
     model_name: string;
     display_name: string;
+    engine?: string;
+    model_size?: string;
     downloaded: boolean;
     downloading?: boolean;  // From server - true if download in progress
     size_mb?: number;

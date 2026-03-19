@@ -1,11 +1,18 @@
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import * as z from 'zod';
 import { useToast } from '@/components/ui/use-toast';
 import { apiClient } from '@/lib/api/client';
 import type { GenerationResponse } from '@/lib/api/types';
 import { LANGUAGE_CODES, type LanguageCode } from '@/lib/constants/languages';
+import {
+  engineSupportsInstruct,
+  getGenerationModelSelection,
+  getModelDisplayNameForSelection,
+  getModelNameForSelection,
+  type TTSEngine,
+} from '@/lib/constants/tts';
 import { useGeneration } from '@/lib/hooks/useGeneration';
 import { useModelDownloadToast } from '@/lib/hooks/useModelDownloadToast';
 import { useGenerationStore } from '@/stores/generationStore';
@@ -15,7 +22,8 @@ const generationSchema = z.object({
   text: z.string().min(1, 'Text is required').max(5000),
   language: z.enum(LANGUAGE_CODES as [LanguageCode, ...LanguageCode[]]),
   seed: z.number().int().optional(),
-  modelSize: z.enum(['1.7B', '0.6B']).optional(),
+  engine: z.enum(['qwen', 'luxtts', 'chatterbox', 'chatterbox_turbo']),
+  modelSize: z.enum(['1.7B', '0.6B', 'default']).optional(),
   instruct: z.string().max(500).optional(),
 });
 
@@ -54,12 +62,41 @@ export function useGenerationForm(options: UseGenerationFormOptions = {}) {
       text: '',
       language: 'en',
       seed: undefined,
+      engine: 'qwen',
       modelSize: '1.7B',
       instruct: '',
       ...options.defaultValues,
     },
   });
   const autoPlayAudioOnSuccess = options.autoPlayAudioOnSuccess ?? true;
+  const watchedEngine = form.watch('engine');
+  const watchedLanguage = form.watch('language');
+  const watchedModelSize = form.watch('modelSize');
+
+  useEffect(() => {
+    if (!watchedEngine || !watchedLanguage) {
+      return;
+    }
+
+    const selection = getGenerationModelSelection(watchedLanguage, {
+      engine: watchedEngine,
+      modelSize: watchedModelSize,
+    });
+
+    if (form.getValues('engine') !== selection.engine) {
+      form.setValue('engine', selection.engine, {
+        shouldDirty: false,
+        shouldValidate: true,
+      });
+    }
+
+    if (form.getValues('modelSize') !== selection.modelSize) {
+      form.setValue('modelSize', selection.modelSize, {
+        shouldDirty: false,
+        shouldValidate: true,
+      });
+    }
+  }, [form, watchedEngine, watchedLanguage, watchedModelSize]);
 
   async function handleSubmit(
     data: GenerationFormValues,
@@ -78,8 +115,16 @@ export function useGenerationForm(options: UseGenerationFormOptions = {}) {
       setIsGenerating(true);
       setStatusMessage('Checking model...');
 
-      const modelName = `qwen-tts-${data.modelSize}`;
-      const displayName = data.modelSize === '1.7B' ? 'Qwen TTS 1.7B' : 'Qwen TTS 0.6B';
+      const engine = data.engine as TTSEngine;
+      const modelSelection = getGenerationModelSelection(data.language, {
+        engine,
+        modelSize: data.modelSize,
+      });
+      const modelName = getModelNameForSelection(modelSelection.engine, modelSelection.modelSize);
+      const displayName = getModelDisplayNameForSelection(
+        modelSelection.engine,
+        modelSelection.modelSize,
+      );
 
       try {
         const modelStatus = await apiClient.getModelStatus();
@@ -99,8 +144,9 @@ export function useGenerationForm(options: UseGenerationFormOptions = {}) {
         text: data.text,
         language: data.language,
         seed: data.seed,
-        model_size: data.modelSize,
-        instruct: data.instruct || undefined,
+        engine: modelSelection.engine,
+        model_size: modelSelection.modelSize,
+        instruct: engineSupportsInstruct(modelSelection.engine) ? data.instruct || undefined : undefined,
       });
 
       toast({

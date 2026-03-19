@@ -278,6 +278,8 @@ export function ProfileForm() {
   const isImageModelReady = Boolean(imageModelStatus?.downloaded);
   const isImageModelDownloading =
     Boolean(imageModelStatus?.downloading) || isImageModelDownloadStarting;
+  const shouldShowReferenceTextField =
+    sampleMode !== 'record' || recordingPromptMode !== 'script';
   const shouldShowTranscriptionControls =
     sampleMode !== 'record' || recordingPromptMode === 'custom';
 
@@ -1549,26 +1551,25 @@ export function ProfileForm() {
                         </p>
                       )}
 
-                      <FormField
-                        control={form.control}
-                        name="referenceText"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>Reference Text</FormLabel>
-                            <FormControl>
-                              <Textarea
-                                placeholder="Enter the exact text spoken in the audio..."
-                                className="min-h-[100px]"
-                                readOnly={
-                                  sampleMode === 'record' && recordingPromptMode === 'script'
-                                }
-                                {...field}
-                              />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
+                      {shouldShowReferenceTextField && (
+                        <FormField
+                          control={form.control}
+                          name="referenceText"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>Reference Text</FormLabel>
+                              <FormControl>
+                                <Textarea
+                                  placeholder="Enter the exact text spoken in the audio..."
+                                  className="min-h-[100px]"
+                                  {...field}
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                      )}
                     </>
                   ) : (
                     // Show sample list when editing
@@ -1717,31 +1718,59 @@ export function ProfileForm() {
                         }}
                         disabled={isApplyingAvatarPreset}
                       >
-                        <SelectTrigger>
+                        <SelectTrigger className="h-auto min-h-[120px] px-3 py-3">
                           {selectedAvatarPreset ? (
-                            <div className="flex items-center gap-2">
-                              <img
-                                src={selectedAvatarPreset.avatarUrl}
-                                alt={`${selectedAvatarPreset.name} idle preview`}
-                                className="h-6 w-6 rounded object-cover border"
-                              />
-                              <span>{selectedAvatarPreset.name}</span>
+                            <div className="flex w-full items-center justify-center">
+                              <div className="grid grid-cols-2 gap-2">
+                                {AVATAR_STATE_DEFS.map((def) => (
+                                  <div
+                                    key={`selected-${def.key}`}
+                                    className="h-14 w-14 overflow-hidden rounded-md border bg-muted/40"
+                                  >
+                                    <img
+                                      src={selectedAvatarPreset.states[def.key]}
+                                      alt={`${selectedAvatarPreset.name} ${def.label}`}
+                                      className="h-full w-full object-cover"
+                                    />
+                                  </div>
+                                ))}
+                              </div>
+                              <span className="sr-only">{selectedAvatarPreset.name}</span>
                             </div>
                           ) : (
                             <span className="text-muted-foreground">None</span>
                           )}
                         </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="none">None</SelectItem>
+                        <SelectContent className="w-[260px]">
+                          <SelectItem value="none" textValue="None">
+                            <span className="text-sm text-muted-foreground">None</span>
+                          </SelectItem>
                           {AVATAR_PRESET_OPTIONS.map((preset) => (
-                            <SelectItem key={preset.id} value={preset.id}>
-                              <div className="flex items-center gap-2">
-                                <img
-                                  src={preset.avatarUrl}
-                                  alt={`${preset.name} idle preview`}
-                                  className="h-6 w-6 rounded object-cover border"
-                                />
-                                <span>{preset.name}</span>
+                            <SelectItem
+                              key={preset.id}
+                              value={preset.id}
+                              textValue={preset.name}
+                              className="py-2"
+                            >
+                              <div
+                                className="flex w-full items-center justify-center"
+                                aria-label={`Apply ${preset.name} avatar preset`}
+                              >
+                                <div className="grid grid-cols-2 gap-2">
+                                  {AVATAR_STATE_DEFS.map((def) => (
+                                    <div
+                                      key={`${preset.id}-${def.key}`}
+                                      className="h-16 w-16 overflow-hidden rounded-md border bg-muted/40"
+                                    >
+                                      <img
+                                        src={preset.states[def.key]}
+                                        alt={`${preset.name} ${def.label}`}
+                                        className="h-full w-full object-cover"
+                                      />
+                                    </div>
+                                  ))}
+                                </div>
+                                <span className="sr-only">{preset.name}</span>
                               </div>
                             </SelectItem>
                           ))}

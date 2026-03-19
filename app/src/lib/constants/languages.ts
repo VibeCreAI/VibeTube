@@ -1,8 +1,3 @@
-/**
- * Supported languages for Qwen3-TTS
- * Based on: https://github.com/QwenLM/Qwen3-TTS
- */
-
 export const SUPPORTED_LANGUAGES = {
   zh: 'Chinese',
   en: 'English',
@@ -14,6 +9,19 @@ export const SUPPORTED_LANGUAGES = {
   pt: 'Portuguese',
   es: 'Spanish',
   it: 'Italian',
+  he: 'Hebrew',
+  ar: 'Arabic',
+  da: 'Danish',
+  el: 'Greek',
+  fi: 'Finnish',
+  hi: 'Hindi',
+  ms: 'Malay',
+  nl: 'Dutch',
+  no: 'Norwegian',
+  pl: 'Polish',
+  sv: 'Swedish',
+  sw: 'Swahili',
+  tr: 'Turkish',
 } as const;
 
 export type LanguageCode = keyof typeof SUPPORTED_LANGUAGES;
@@ -30,3 +38,7 @@ export const TRANSCRIPTION_LANGUAGE_OPTIONS: Array<{
   value: TranscriptionLanguageCode;
   label: string;
 }> = [{ value: 'auto', label: 'Auto-detect' }, ...LANGUAGE_OPTIONS];
+
+export function getLanguageLabel(language: string): string {
+  return SUPPORTED_LANGUAGES[language as LanguageCode] ?? language;
+}

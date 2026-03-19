@@ -1,5 +1,6 @@
 import { Loader2, Mic, Play, Square } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { AudioReactiveVisualizer } from '@/components/AudioReactiveVisualizer';
 import { AudioProcessingControls } from '@/components/AudioProcessingControls';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -86,6 +87,7 @@ export function StoryVoiceRecordingForm({
     isRecording,
     duration,
     error: recordingError,
+    activeStream,
     startRecording,
     stopRecording,
     cancelRecording,
@@ -227,23 +229,47 @@ export function StoryVoiceRecordingForm({
         </div>
       </div>
 
-      {!recordedFile && !isRecording && (
-        <Button type="button" onClick={() => void startRecording()} disabled={isSubmitting || !profileId}>
-          <Mic className="mr-2 h-4 w-4" />
-          Start Recording
-        </Button>
-      )}
-
-      {isRecording && (
-        <div className="space-y-3 rounded-xl border border-accent/40 bg-accent/5 p-4">
-          <div className="flex items-center gap-2 text-sm">
-            <span className="h-2.5 w-2.5 rounded-full bg-accent animate-pulse" />
-            Recording {duration.toFixed(1)}s
+      {!recordedFile && (
+        <div
+          className={`relative overflow-hidden rounded-xl p-4 min-h-[180px] ${
+            isRecording
+              ? 'border border-accent/40 bg-accent/5'
+              : 'border-2 border-dashed border-border/60 bg-background/40'
+          }`}
+        >
+          <AudioReactiveVisualizer
+            stream={activeStream}
+            autoCapture={Boolean(profileId)}
+            className="opacity-25"
+          />
+          <div className="relative z-10 flex min-h-[148px] flex-col items-center justify-center gap-4 text-center">
+            {!isRecording ? (
+              <>
+                <Button
+                  type="button"
+                  onClick={() => void startRecording()}
+                  disabled={isSubmitting || !profileId}
+                >
+                  <Mic className="mr-2 h-4 w-4" />
+                  Start Recording
+                </Button>
+                <p className="max-w-sm text-sm text-muted-foreground">
+                  The microphone animation reacts before and during capture.
+                </p>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  <span className="h-2.5 w-2.5 rounded-full bg-accent animate-pulse" />
+                  Recording {duration.toFixed(1)}s
+                </div>
+                <Button type="button" onClick={stopRecording} disabled={isSubmitting}>
+                  <Square className="mr-2 h-4 w-4" />
+                  Stop Recording
+                </Button>
+              </>
+            )}
           </div>
-          <Button type="button" onClick={stopRecording} disabled={isSubmitting}>
-            <Square className="mr-2 h-4 w-4" />
-            Stop Recording
-          </Button>
         </div>
       )}
 

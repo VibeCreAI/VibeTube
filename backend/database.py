@@ -45,6 +45,8 @@ class Generation(Base):
     profile_id = Column(String, ForeignKey("profiles.id"), nullable=False)
     text = Column(Text, nullable=False)
     language = Column(String, default="en")
+    engine = Column(String, nullable=False, default="qwen")
+    model_size = Column(String, nullable=False, default="1.7B")
     audio_path = Column(String, nullable=False)
     duration = Column(Float, nullable=False)
     seed = Column(Integer)
@@ -172,8 +174,30 @@ def _run_migrations(engine):
     
     inspector = inspect(engine)
     
+    table_names = set(inspector.get_table_names())
+
+    if 'generations' in table_names:
+        columns = {col['name'] for col in inspector.get_columns('generations')}
+        if 'engine' not in columns:
+            print("Migrating generations: adding engine column")
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE generations ADD COLUMN engine VARCHAR NOT NULL DEFAULT 'qwen'"))
+                conn.execute(text("UPDATE generations SET engine = 'qwen' WHERE engine IS NULL OR engine = ''"))
+                conn.commit()
+                print("Added engine column to generations")
+            inspector = inspect(engine)
+            table_names = set(inspector.get_table_names())
+        columns = {col['name'] for col in inspector.get_columns('generations')}
+        if 'model_size' not in columns:
+            print("Migrating generations: adding model_size column")
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE generations ADD COLUMN model_size VARCHAR NOT NULL DEFAULT '1.7B'"))
+                conn.execute(text("UPDATE generations SET model_size = '1.7B' WHERE model_size IS NULL OR model_size = ''"))
+                conn.commit()
+                print("Added model_size column to generations")
+
     # Check if story_items table exists
-    if 'story_items' not in inspector.get_table_names():
+    if 'story_items' not in table_names:
         return  # Table doesn't exist yet, will be created fresh
     
     # Get columns in story_items table

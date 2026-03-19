@@ -12,6 +12,7 @@ import {
   Square,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { AudioReactiveVisualizer } from '@/components/AudioReactiveVisualizer';
 import { BroadcastStage } from '@/components/BroadcastTab/BroadcastStage';
 import { ObsGuideDialog } from '@/components/BroadcastTab/ObsGuideDialog';
 import { AudioProcessingControls } from '@/components/AudioProcessingControls';
@@ -221,6 +222,7 @@ export function BroadcastTab() {
   const {
     isLive,
     error: liveError,
+    activeStream: liveStream,
     stageState,
     startLive,
     stopLive,
@@ -638,15 +640,39 @@ export function BroadcastTab() {
                   </p>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button onClick={() => void startLive()} disabled={!canUseBroadcast || isLive}>
-                    <Radio className="mr-2 h-4 w-4" />
-                    Start Live
-                  </Button>
-                  <Button variant="outline" onClick={stopLive} disabled={!isLive}>
-                    <Square className="mr-2 h-4 w-4" />
-                    Stop
-                  </Button>
+                <div className="relative overflow-hidden rounded-xl border border-border/60 bg-background/40 p-4 min-h-[180px]">
+                  <AudioReactiveVisualizer
+                    stream={liveStream}
+                    autoCapture={canUseBroadcast}
+                    className="opacity-25"
+                  />
+                  <div className="relative z-10 flex min-h-[148px] flex-col items-center justify-center gap-4 text-center">
+                    {isLive ? (
+                      <>
+                        <div className="flex items-center gap-2 text-sm font-medium">
+                          <span className="h-2.5 w-2.5 rounded-full bg-accent animate-pulse" />
+                          Microphone live
+                        </div>
+                        <p className="max-w-sm text-sm text-muted-foreground">
+                          The selected avatar is reacting to your voice in real time.
+                        </p>
+                      </>
+                    ) : (
+                      <p className="max-w-sm text-sm text-muted-foreground">
+                        Preview your mic activity here, then start live mode when you are ready.
+                      </p>
+                    )}
+                    <div className="flex flex-wrap items-center justify-center gap-2">
+                      <Button onClick={() => void startLive()} disabled={!canUseBroadcast || isLive}>
+                        <Radio className="mr-2 h-4 w-4" />
+                        Start Live
+                      </Button>
+                      <Button variant="outline" onClick={stopLive} disabled={!isLive}>
+                        <Square className="mr-2 h-4 w-4" />
+                        Stop
+                      </Button>
+                    </div>
+                  </div>
                 </div>
 
                 <div className="rounded-xl border border-border/60 bg-background/40 p-4 text-sm text-muted-foreground">
@@ -681,23 +707,43 @@ export function BroadcastTab() {
                   </p>
                 </div>
 
-                {!recordedFile && !isRecording && (
-                  <Button onClick={() => void startRecording()} disabled={!canUseBroadcast}>
-                    <Mic className="mr-2 h-4 w-4" />
-                    Start Recording
-                  </Button>
-                )}
-
-                {isRecording && (
-                  <div className="space-y-3 rounded-xl border border-accent/40 bg-accent/5 p-4">
-                    <div className="flex items-center gap-2 text-sm">
-                      <span className="h-2.5 w-2.5 rounded-full bg-accent animate-pulse" />
-                      Recording {duration.toFixed(1)}s
+                {!recordedFile && (
+                  <div
+                    className={`relative overflow-hidden rounded-xl p-4 min-h-[180px] ${
+                      isRecording
+                        ? 'border border-accent/40 bg-accent/5'
+                        : 'border-2 border-dashed border-border/60 bg-background/40'
+                    }`}
+                  >
+                    <AudioReactiveVisualizer
+                      stream={activeStream}
+                      autoCapture={canUseBroadcast}
+                      className="opacity-25"
+                    />
+                    <div className="relative z-10 flex min-h-[148px] flex-col items-center justify-center gap-4 text-center">
+                      {!isRecording ? (
+                        <>
+                          <Button onClick={() => void startRecording()} disabled={!canUseBroadcast}>
+                            <Mic className="mr-2 h-4 w-4" />
+                            Start Recording
+                          </Button>
+                          <p className="max-w-sm text-sm text-muted-foreground">
+                            The mic animation reacts before and during capture, like the profile recorder.
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          <div className="flex items-center gap-2 text-sm font-medium">
+                            <span className="h-2.5 w-2.5 rounded-full bg-accent animate-pulse" />
+                            Recording {duration.toFixed(1)}s
+                          </div>
+                          <Button onClick={stopRecording}>
+                            <Square className="mr-2 h-4 w-4" />
+                            Stop Recording
+                          </Button>
+                        </>
+                      )}
                     </div>
-                    <Button onClick={stopRecording}>
-                      <Square className="mr-2 h-4 w-4" />
-                      Stop Recording
-                    </Button>
                   </div>
                 )}
 

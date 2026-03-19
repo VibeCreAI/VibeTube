@@ -35,7 +35,16 @@ import type {
   VibeTubeExportFormat,
   VibeTubeJobResponse,
 } from '@/lib/api/types';
-import { LANGUAGE_OPTIONS } from '@/lib/constants/languages';
+import {
+  engineSupportsInstruct,
+  getGenerationModelOptions,
+  getGenerationModelSelection,
+  getLanguageOptionsForEngine,
+  getModelDisplayNameForSelection,
+  getModelNameForSelection,
+  getModelSelectionFromName,
+} from '@/lib/constants/tts';
+import type { LanguageCode } from '@/lib/constants/languages';
 import { useGenerationForm } from '@/lib/hooks/useGenerationForm';
 import { useHistory } from '@/lib/hooks/useHistory';
 import { useProfiles } from '@/lib/hooks/useProfiles';
@@ -201,6 +210,14 @@ export function StoryContent() {
       });
     },
   });
+  const selectedGenerateLanguage = generateForm.watch('language');
+  const selectedGenerateModel = getGenerationModelSelection(selectedGenerateLanguage, {
+    engine: generateForm.watch('engine'),
+    modelSize: generateForm.watch('modelSize'),
+  });
+  const generateLanguageOptions = getLanguageOptionsForEngine(selectedGenerateModel.engine);
+  const generateModelOptions = getGenerationModelOptions(selectedGenerateLanguage);
+  const generateSupportsInstruct = engineSupportsInstruct(selectedGenerateModel.engine);
 
   useEffect(() => {
     if (!selectedProfileId && profiles && profiles.length > 0) {
@@ -216,11 +233,24 @@ export function StoryContent() {
     if (!selectedProfile?.language) {
       return;
     }
-    generateForm.setValue('language', selectedProfile.language as (typeof LANGUAGE_OPTIONS)[number]['value'], {
+    const nextLanguage = selectedProfile.language as LanguageCode;
+    const nextModel = getGenerationModelSelection(nextLanguage, {
+      engine: selectedGenerateModel.engine,
+      modelSize: selectedGenerateModel.modelSize,
+    });
+    generateForm.setValue('language', nextLanguage, {
       shouldDirty: true,
       shouldValidate: true,
     });
-  }, [generateForm, profiles, selectedProfileId]);
+    generateForm.setValue('engine', nextModel.engine, {
+      shouldDirty: true,
+      shouldValidate: true,
+    });
+    generateForm.setValue('modelSize', nextModel.modelSize, {
+      shouldDirty: true,
+      shouldValidate: true,
+    });
+  }, [generateForm, profiles, selectedGenerateModel.engine, selectedGenerateModel.modelSize, selectedProfileId]);
 
   // Use playback hook
   useStoryPlayback(story?.items);
@@ -322,11 +352,13 @@ export function StoryContent() {
         onMutate: async (variables) => {
           setRegenerateStatusMessage('Checking model...');
           try {
-            const modelName = `qwen-tts-${variables.data.model_size || '1.7B'}`;
+            const engine = variables.data.engine || 'qwen';
+            const modelName = getModelNameForSelection(engine, variables.data.model_size);
+            const displayName = getModelDisplayNameForSelection(engine, variables.data.model_size);
             const modelStatus = await apiClient.getModelStatus();
             const model = modelStatus.models.find((entry) => entry.model_name === modelName);
             if (model && !model.downloaded) {
-              setRegenerateStatusMessage(`Downloading ${modelName}...`);
+              setRegenerateStatusMessage(`Downloading ${displayName}...`);
             } else {
               setRegenerateStatusMessage('Generating audio...');
             }
@@ -835,7 +867,7 @@ export function StoryContent() {
                                     </SelectTrigger>
                                   </FormControl>
                                   <SelectContent>
-                                    {LANGUAGE_OPTIONS.map((lang) => (
+                                    {generateLanguageOptions.map((lang) => (
                                       <SelectItem
                                         key={lang.value}
                                         value={lang.value}
@@ -852,23 +884,39 @@ export function StoryContent() {
                           />
                           <FormField
                             control={generateForm.control}
-                            name="modelSize"
-                            render={({ field }) => (
+                            name="engine"
+                            render={() => (
                               <FormItem className="space-y-1">
                                 <div className="text-xs text-muted-foreground">Model</div>
-                                <Select value={field.value} onValueChange={field.onChange}>
+                                <Select
+                                  value={selectedGenerateModel.modelName}
+                                  onValueChange={(value) => {
+                                    const nextModel = getModelSelectionFromName(value);
+                                    generateForm.setValue('engine', nextModel.engine, {
+                                      shouldDirty: true,
+                                      shouldValidate: true,
+                                    });
+                                    generateForm.setValue('modelSize', nextModel.modelSize, {
+                                      shouldDirty: true,
+                                      shouldValidate: true,
+                                    });
+                                  }}
+                                >
                                   <FormControl>
                                     <SelectTrigger className="h-9 text-xs">
                                       <SelectValue />
                                     </SelectTrigger>
                                   </FormControl>
                                   <SelectContent>
-                                    <SelectItem value="1.7B" className="text-xs">
-                                      Qwen3-TTS 1.7B
-                                    </SelectItem>
-                                    <SelectItem value="0.6B" className="text-xs">
-                                      Qwen3-TTS 0.6B
-                                    </SelectItem>
+                                    {generateModelOptions.map((option) => (
+                                      <SelectItem
+                                        key={option.modelName}
+                                        value={option.modelName}
+                                        className="text-xs"
+                                      >
+                                        {option.label}
+                                      </SelectItem>
+                                    ))}
                                   </SelectContent>
                                 </Select>
                                 <FormMessage className="text-xs" />
@@ -876,22 +924,24 @@ export function StoryContent() {
                             )}
                           />
                         </div>
-                        <FormField
-                          control={generateForm.control}
-                          name="instruct"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormControl>
-                                <Textarea
-                                  {...field}
-                                  placeholder="Optional delivery instructions..."
-                                  className="min-h-[72px] resize-none text-sm"
-                                />
-                              </FormControl>
-                              <FormMessage className="text-xs" />
-                            </FormItem>
-                          )}
-                        />
+                        {generateSupportsInstruct && (
+                          <FormField
+                            control={generateForm.control}
+                            name="instruct"
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormControl>
+                                  <Textarea
+                                    {...field}
+                                    placeholder="Optional delivery instructions..."
+                                    className="min-h-[72px] resize-none text-sm"
+                                  />
+                                </FormControl>
+                                <FormMessage className="text-xs" />
+                              </FormItem>
+                            )}
+                          />
+                        )}
                         {generateStatusMessage && (
                           <div className="flex items-center gap-2 text-xs text-muted-foreground">
                             {isGenerating && <Loader2 className="h-3.5 w-3.5 animate-spin" />}

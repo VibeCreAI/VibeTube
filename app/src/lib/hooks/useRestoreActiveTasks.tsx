@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiClient } from '@/lib/api/client';
+import { MODEL_DISPLAY_NAMES } from '@/lib/constants/tts';
 import { useGenerationStore } from '@/stores/generationStore';
 import type { ActiveDownloadTask } from '@/lib/api/types';
 
@@ -74,14 +75,5 @@ export function useRestoreActiveTasks() {
   return activeDownloads;
 }
 
-/**
- * Map model names to display names for download toasts.
- */
-export const MODEL_DISPLAY_NAMES: Record<string, string> = {
-  'qwen-tts-1.7B': 'Qwen TTS 1.7B',
-  'qwen-tts-0.6B': 'Qwen TTS 0.6B',
-  'whisper-base': 'Whisper Base',
-  'whisper-small': 'Whisper Small',
-  'whisper-medium': 'Whisper Medium',
-  'whisper-large': 'Whisper Large',
-};
+export { MODEL_DISPLAY_NAMES };
+

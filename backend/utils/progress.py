@@ -246,6 +246,9 @@ class ProgressManager:
                     # Send heartbeat
                     yield ": heartbeat\n\n"
                     continue
+                except asyncio.CancelledError:
+                    logger.info(f"SSE client disconnected from {model_name}")
+                    raise
         finally:
             # Remove from listeners
             if model_name in self._listeners:

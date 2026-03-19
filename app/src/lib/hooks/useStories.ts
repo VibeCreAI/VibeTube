@@ -4,6 +4,8 @@ import type {
   StoryBatchCreateRequest,
   StoryBatchCreateResponse,
   StoryCreate,
+  StoryDetailResponse,
+  StoryItemDetail,
   StoryItemBatchUpdate,
   StoryItemCreate,
   StoryItemMove,
@@ -14,6 +16,45 @@ import type {
   StoryVibeTubeRenderRequest,
 } from '@/lib/api/types';
 import { usePlatform } from '@/platform/PlatformContext';
+
+function getEffectiveDurationMs(item: Pick<StoryItemDetail, 'duration' | 'trim_start_ms' | 'trim_end_ms'>) {
+  return Math.max(0, item.duration * 1000 - (item.trim_start_ms || 0) - (item.trim_end_ms || 0));
+}
+
+function applyRegeneratedStoryItem(
+  story: StoryDetailResponse | undefined,
+  updatedItem: StoryItemDetail,
+): StoryDetailResponse | undefined {
+  if (!story) {
+    return story;
+  }
+
+  const previousItem = story.items.find((item) => item.id === updatedItem.id);
+  if (!previousItem) {
+    return {
+      ...story,
+      items: story.items.map((item) => (item.id === updatedItem.id ? updatedItem : item)),
+    };
+  }
+
+  const durationDeltaMs = getEffectiveDurationMs(updatedItem) - getEffectiveDurationMs(previousItem);
+
+  return {
+    ...story,
+    items: story.items.map((item) => {
+      if (item.id === updatedItem.id) {
+        return updatedItem;
+      }
+      if (durationDeltaMs !== 0 && item.start_time_ms > previousItem.start_time_ms) {
+        return {
+          ...item,
+          start_time_ms: Math.max(0, item.start_time_ms + durationDeltaMs),
+        };
+      }
+      return item;
+    }),
+  };
+}
 
 export function useStories() {
   return useQuery({
@@ -136,7 +177,11 @@ export function useRegenerateStoryItem() {
       itemId: string;
       data: StoryItemRegenerateRequest;
     }) => apiClient.regenerateStoryItem(storyId, itemId, data),
-    onSuccess: (_, variables) => {
+    onSuccess: (updatedItem, variables) => {
+      queryClient.setQueryData<StoryDetailResponse | undefined>(
+        ['stories', variables.storyId],
+        (currentStory) => applyRegeneratedStoryItem(currentStory, updatedItem),
+      );
       queryClient.invalidateQueries({ queryKey: ['history'] });
       queryClient.invalidateQueries({ queryKey: ['stories'] });
       queryClient.invalidateQueries({ queryKey: ['stories', variables.storyId] });

@@ -1,5 +1,6 @@
 // API Types matching backend Pydantic models
 import type { LanguageCode, TranscriptionLanguageCode } from '@/lib/constants/languages';
+import type { TTSModelSize, TTSEngine, WhisperModelSize } from '@/lib/constants/tts';
 
 export interface VoiceProfileCreate {
   name: string;
@@ -33,7 +34,8 @@ export interface GenerationRequest {
   text: string;
   language: LanguageCode;
   seed?: number;
-  model_size?: '1.7B' | '0.6B';
+  engine?: TTSEngine;
+  model_size?: TTSModelSize;
   instruct?: string;
 }
 
@@ -42,9 +44,12 @@ export interface GenerationResponse {
   profile_id: string;
   text: string;
   language: string;
+  engine: TTSEngine;
+  model_size: TTSModelSize;
   audio_path: string;
   duration: number;
   seed?: number;
+  instruct?: string;
   created_at: string;
 }
 
@@ -68,6 +73,7 @@ export interface HistoryListResponse {
 
 export interface TranscriptionRequest {
   language?: TranscriptionLanguageCode;
+  model?: WhisperModelSize;
 }
 
 export interface TranscriptionResponse {
@@ -98,6 +104,8 @@ export interface ModelProgress {
 export interface ModelStatus {
   model_name: string;
   display_name: string;
+  engine?: TTSEngine | 'whisper';
+  model_size?: TTSModelSize | WhisperModelSize;
   downloaded: boolean;
   downloading: boolean; // True if download is in progress
   size_mb?: number;
@@ -167,6 +175,8 @@ export interface StoryItemDetail {
   profile_name: string;
   text: string;
   language: string;
+  engine: TTSEngine;
+  model_size: TTSModelSize;
   audio_path: string;
   duration: number;
   seed?: number;
@@ -222,7 +232,8 @@ export interface StoryItemRegenerateRequest {
   text?: string;
   language: LanguageCode;
   seed?: number;
-  model_size?: '1.7B' | '0.6B';
+  engine?: TTSEngine;
+  model_size?: TTSModelSize;
   instruct?: string;
 }
 
@@ -273,7 +284,8 @@ export interface StoryBatchEntry {
   text: string;
   language?: LanguageCode;
   seed?: number;
-  model_size?: '1.7B' | '0.6B';
+  engine?: TTSEngine;
+  model_size?: TTSModelSize;
   instruct?: string;
 }
 

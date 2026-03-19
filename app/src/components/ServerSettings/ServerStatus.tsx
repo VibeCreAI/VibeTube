@@ -1,6 +1,7 @@
 import { Loader2, XCircle } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { DOWNLOADABLE_MODELS } from '@/lib/constants/tts';
 import { useServerHealth } from '@/lib/hooks/useServer';
 import { useServerStore } from '@/stores/serverStore';
 import { ModelProgress } from './ModelProgress';
@@ -22,12 +23,13 @@ export function ServerStatus() {
 
         {/* Model download progress */}
         <div className="space-y-2">
-          <ModelProgress modelName="qwen-tts-1.7B" displayName="Qwen TTS 1.7B" />
-          <ModelProgress modelName="qwen-tts-0.6B" displayName="Qwen TTS 0.6B" />
-          <ModelProgress modelName="whisper-base" displayName="Whisper Base" />
-          <ModelProgress modelName="whisper-small" displayName="Whisper Small" />
-          <ModelProgress modelName="whisper-medium" displayName="Whisper Medium" />
-          <ModelProgress modelName="whisper-large" displayName="Whisper Large" />
+          {DOWNLOADABLE_MODELS.map((model) => (
+            <ModelProgress
+              key={model.modelName}
+              modelName={model.modelName}
+              displayName={model.displayName}
+            />
+          ))}
         </div>
 
         {isLoading ? (
