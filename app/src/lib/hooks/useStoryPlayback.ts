@@ -38,6 +38,8 @@ export function useStoryPlayback(items: StoryItemDetail[] | undefined) {
   const audioBuffersRef = useRef<Map<string, AudioBuffer>>(new Map());
   // Currently playing AudioBufferSourceNodes by item.id (unique per clip)
   const activeSourcesRef = useRef<Map<string, ActiveSource>>(new Map());
+  // Monotonic preload request id used to ignore stale fetch/decode completions.
+  const preloadRequestRef = useRef(0);
   // Animation frame for syncing visual playhead
   const animationFrameRef = useRef<number | null>(null);
 
@@ -69,6 +71,7 @@ export function useStoryPlayback(items: StoryItemDetail[] | undefined) {
     const activeSource = activeSourcesRef.current.get(itemId);
     if (activeSource) {
       try {
+        activeSource.source.onended = null;
         activeSource.source.stop();
       } catch {
         // Source may have already stopped
@@ -85,6 +88,8 @@ export function useStoryPlayback(items: StoryItemDetail[] | undefined) {
       return;
     }
 
+    const preloadRequestId = ++preloadRequestRef.current;
+    let isCancelled = false;
     const currentIds = new Set(items.map((item) => item.generation_id));
     const audioContext = getAudioContext();
 
@@ -106,6 +111,12 @@ export function useStoryPlayback(items: StoryItemDetail[] | undefined) {
           .then((response) => response.arrayBuffer())
           .then((arrayBuffer) => audioContext.decodeAudioData(arrayBuffer))
           .then((audioBuffer) => {
+            if (isCancelled || preloadRequestId !== preloadRequestRef.current) {
+              return;
+            }
+            if (!currentIds.has(item.generation_id)) {
+              return;
+            }
             audioBuffersRef.current.set(item.generation_id, audioBuffer);
             console.log(
               '[StoryPlayback] Preloaded buffer:',
@@ -123,8 +134,15 @@ export function useStoryPlayback(items: StoryItemDetail[] | undefined) {
     }
 
     Promise.all(preloadPromises).then(() => {
+      if (isCancelled || preloadRequestId !== preloadRequestRef.current) {
+        return;
+      }
       console.log('[StoryPlayback] Preloaded', audioBuffersRef.current.size, 'audio buffers');
     });
+
+    return () => {
+      isCancelled = true;
+    };
   }, [items, getAudioContext]);
 
   // Cleanup AudioContext on unmount
@@ -147,6 +165,7 @@ export function useStoryPlayback(items: StoryItemDetail[] | undefined) {
         });
         audioContextRef.current = null;
       }
+      preloadRequestRef.current += 1;
 
       if (animationFrameRef.current !== null) {
         cancelAnimationFrame(animationFrameRef.current);
@@ -291,8 +310,11 @@ export function useStoryPlayback(items: StoryItemDetail[] | undefined) {
 
           // Clean up when source ends
           source.onended = () => {
+            const activeEntry = activeSourcesRef.current.get(item.id);
+            if (activeEntry?.source === source) {
+              activeSourcesRef.current.delete(item.id);
+            }
             console.log('[StoryPlayback] Source ended:', item.id);
-            activeSourcesRef.current.delete(item.id);
           };
         }
       }

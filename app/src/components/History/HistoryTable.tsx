@@ -12,7 +12,8 @@ import {
   Square,
   Trash2,
 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { HistoryRegenerateDialog } from '@/components/History/HistoryRegenerateDialog';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
@@ -30,7 +31,6 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useToast } from '@/components/ui/use-toast';
-import { HistoryRegenerateDialog } from '@/components/History/HistoryRegenerateDialog';
 import { apiClient } from '@/lib/api/client';
 import type {
   GenerationRequest,
@@ -38,15 +38,19 @@ import type {
   VibeTubeExportFormat,
   VibeTubeJobResponse,
 } from '@/lib/api/types';
-import { getModelDisplayNameForSelection, getModelNameForSelection } from '@/lib/constants/tts';
+import {
+  getGenerationAudioLabel,
+  getModelDisplayNameForSelection,
+  getModelNameForSelection,
+} from '@/lib/constants/tts';
 import { BOTTOM_SAFE_AREA_PADDING } from '@/lib/constants/ui';
+import { useGeneration } from '@/lib/hooks/useGeneration';
 import {
   useDeleteGeneration,
   useExportGenerationAudio,
   useHistory,
   useImportGeneration,
 } from '@/lib/hooks/useHistory';
-import { useGeneration } from '@/lib/hooks/useGeneration';
 import { useProfile, useProfiles } from '@/lib/hooks/useProfiles';
 import { cn } from '@/lib/utils/cn';
 import { formatDate, formatDuration } from '@/lib/utils/format';
@@ -92,6 +96,7 @@ export function HistoryTable() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const regenerateRequestRef = useRef(0);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -144,6 +149,12 @@ export function HistoryTable() {
     queryFn: () => apiClient.listVibeTubeJobs(),
   });
 
+  const resetHistoryPagination = useCallback(() => {
+    setPage(0);
+    setAllHistory([]);
+    setTotal(0);
+  }, []);
+
   useEffect(() => {
     if (showSelectedProfileOnly && !selectedProfileId) {
       setShowSelectedProfileOnly(false);
@@ -153,9 +164,8 @@ export function HistoryTable() {
   useEffect(() => {
     const activeFilter = historyFilterKey;
     if (!activeFilter) return;
-    setPage(0);
-    setAllHistory([]);
-  }, [historyFilterKey]);
+    resetHistoryPagination();
+  }, [historyFilterKey, resetHistoryPagination]);
 
   // Update accumulated history when new data arrives
   useEffect(() => {
@@ -164,6 +174,10 @@ export function HistoryTable() {
       if (page === 0) {
         // Reset to first page
         setAllHistory(historyData.items);
+      } else if (historyData.items.length === 0 && historyData.total > 0 && allHistory.length === 0) {
+        // If we ever land on an empty non-zero page with non-empty history,
+        // snap back to page 0 instead of showing a blank list.
+        setPage(0);
       } else {
         // Append new items, avoiding duplicates
         setAllHistory((prev) => {
@@ -173,15 +187,14 @@ export function HistoryTable() {
         });
       }
     }
-  }, [historyData, page]);
+  }, [historyData, page, allHistory.length]);
 
   // Reset to page 0 when deletions or imports occur
   useEffect(() => {
     if (deleteGeneration.isSuccess || importGeneration.isSuccess) {
-      setPage(0);
-      setAllHistory([]);
+      resetHistoryPagination();
     }
-  }, [deleteGeneration.isSuccess, importGeneration.isSuccess]);
+  }, [deleteGeneration.isSuccess, importGeneration.isSuccess, resetHistoryPagination]);
 
   // Intersection Observer for infinite scroll
   useEffect(() => {
@@ -191,7 +204,12 @@ export function HistoryTable() {
     const observer = new IntersectionObserver(
       (entries) => {
         const target = entries[0];
-        if (target.isIntersecting && !isFetching && allHistory.length < total) {
+        if (
+          target.isIntersecting &&
+          !isFetching &&
+          allHistory.length > 0 &&
+          allHistory.length < total
+        ) {
           setPage((prev) => prev + 1);
         }
       },
@@ -263,27 +281,32 @@ export function HistoryTable() {
     setRegenerateDialogOpen(true);
   };
 
-  const handleRegenerateSubmit = (data: GenerationRequest) => {
+  const handleRegenerateSubmit = async (data: GenerationRequest) => {
+    const requestId = ++regenerateRequestRef.current;
     setRegenerateStatusMessage('Checking model...');
+    try {
+      const engine = data.engine || 'qwen';
+      const modelName = getModelNameForSelection(engine, data.model_size);
+      const displayName = getModelDisplayNameForSelection(engine, data.model_size);
+      const modelStatus = await apiClient.getModelStatus();
+      const model = modelStatus.models.find((entry) => entry.model_name === modelName);
+      if (model && !model.downloaded) {
+        setRegenerateStatusMessage(`Downloading ${displayName}...`);
+      } else {
+        setRegenerateStatusMessage('Generating audio...');
+      }
+    } catch {
+      setRegenerateStatusMessage('Generating audio...');
+    }
+
     regenerateGeneration.mutate(data, {
-      onMutate: async (variables) => {
-        setRegenerateStatusMessage('Checking model...');
-        try {
-          const engine = variables.engine || 'qwen';
-          const modelName = getModelNameForSelection(engine, variables.model_size);
-          const displayName = getModelDisplayNameForSelection(engine, variables.model_size);
-          const modelStatus = await apiClient.getModelStatus();
-          const model = modelStatus.models.find((entry) => entry.model_name === modelName);
-          if (model && !model.downloaded) {
-            setRegenerateStatusMessage(`Downloading ${displayName}...`);
-          } else {
-            setRegenerateStatusMessage('Generating audio...');
-          }
-        } catch {
-          setRegenerateStatusMessage('Generating audio...');
+      onSuccess: async (result) => {
+        if (requestId !== regenerateRequestRef.current) {
+          return;
         }
-      },
-      onSuccess: (result) => {
+        resetHistoryPagination();
+        await queryClient.invalidateQueries({ queryKey: ['history'] });
+        await queryClient.refetchQueries({ queryKey: ['history'] });
         setRegenerateDialogOpen(false);
         setGenerationToRegenerate(null);
         setRegenerateStatusMessage('');
@@ -300,6 +323,9 @@ export function HistoryTable() {
         );
       },
       onError: (error) => {
+        if (requestId !== regenerateRequestRef.current) {
+          return;
+        }
         setRegenerateStatusMessage('');
         toast({
           title: 'Failed to regenerate audio',
@@ -580,8 +606,7 @@ export function HistoryTable() {
       const failedGenerationCount = generationDeletionResults.length - deletedGenerationCount;
 
       setSelectedGenerationIds([]);
-      setPage(0);
-      setAllHistory([]);
+      resetHistoryPagination();
       await queryClient.invalidateQueries({ queryKey: ['history'] });
       await queryClient.invalidateQueries({ queryKey: ['vibetube-jobs'] });
 
@@ -736,6 +761,13 @@ export function HistoryTable() {
                         <span className="text-xs text-muted-foreground">
                           {formatDuration(gen.duration)}
                         </span>
+                        <span className="rounded-full border border-border/70 bg-background/70 px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                          {getGenerationAudioLabel({
+                            engine: gen.engine,
+                            modelSize: gen.model_size,
+                            sourceType: gen.source_type,
+                          })}
+                        </span>
                       </div>
                       <div className="text-xs text-muted-foreground">
                         {formatDate(gen.created_at)}
@@ -778,17 +810,25 @@ export function HistoryTable() {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
-                        <DropdownMenuItem
-                          onClick={() => handleDownloadAudio(gen.id, gen.text)}
-                          disabled={exportGenerationAudio.isPending}
-                        >
-                          <Download className="mr-2 h-4 w-4" />
-                          Export Audio
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => openVibeDialog(gen)}>
-                          <Eye className="mr-2 h-4 w-4" />
-                          Preview/Export Video
-                        </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => {
+                              handleFocusGeneration(gen);
+                              handleDownloadAudio(gen.id, gen.text);
+                            }}
+                            disabled={exportGenerationAudio.isPending}
+                          >
+                            <Download className="mr-2 h-4 w-4" />
+                            Export Audio
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => {
+                              handleFocusGeneration(gen);
+                              openVibeDialog(gen);
+                            }}
+                          >
+                            <Eye className="mr-2 h-4 w-4" />
+                            Preview/Export Video
+                          </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </div>
@@ -800,6 +840,7 @@ export function HistoryTable() {
                       size="sm"
                       onClick={(event) => {
                         event.stopPropagation();
+                        handleFocusGeneration(gen);
                         handlePlay(gen.id, gen.text, gen.profile_id);
                       }}
                       onMouseDown={(event) => event.stopPropagation()}
@@ -813,6 +854,7 @@ export function HistoryTable() {
                       size="sm"
                       onClick={(event) => {
                         event.stopPropagation();
+                        handleFocusGeneration(gen);
                         if (hasLinkedVideo) {
                           handlePlayLatestVideo(gen);
                         } else {
@@ -839,6 +881,7 @@ export function HistoryTable() {
                       size="sm"
                       onClick={(event) => {
                         event.stopPropagation();
+                        handleFocusGeneration(gen);
                         handleRegenerateClick(gen);
                       }}
                       onMouseDown={(event) => event.stopPropagation()}
@@ -852,6 +895,7 @@ export function HistoryTable() {
                       size="sm"
                       onClick={(event) => {
                         event.stopPropagation();
+                        handleFocusGeneration(gen);
                         handleDeleteClick(gen.id, gen.profile_name);
                       }}
                       onMouseDown={(event) => event.stopPropagation()}

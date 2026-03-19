@@ -172,6 +172,22 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
     form.clearErrors('referenceText');
   }, [form, mode, recordingLanguage, recordingPromptMode]);
 
+  useEffect(() => {
+    if (mode === 'record' && recordingPromptMode === 'script') {
+      return;
+    }
+
+    const scriptText = getVoiceSampleScript(recordingLanguage).trim();
+    const currentText = (form.getValues('referenceText') || '').trim();
+
+    // When transcription input is visible, start blank instead of carrying
+    // over script-mode auto text.
+    if (currentText && currentText === scriptText) {
+      form.setValue('referenceText', '', { shouldValidate: false, shouldDirty: false });
+      form.clearErrors('referenceText');
+    }
+  }, [form, mode, recordingLanguage, recordingPromptMode]);
+
   async function handleTranscribe() {
     const file = form.getValues('file');
     if (!file) {
@@ -263,7 +279,7 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
         <DialogHeader>
           <DialogTitle>Add Audio Sample</DialogTitle>
           <DialogDescription>
-            Upload an audio file and provide the reference text that matches the audio.
+            Upload an audio file and provide the transcription that matches the audio.
           </DialogDescription>
         </DialogHeader>
 
@@ -392,7 +408,7 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
               />
             ) : (
               <p className="text-sm text-muted-foreground">
-                Sample script mode fills the reference text automatically, so transcription is not
+                Sample script mode fills the transcription automatically, so transcription is not
                 needed.
               </p>
             )}
@@ -403,7 +419,7 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
                 name="referenceText"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Reference Text</FormLabel>
+                    <FormLabel>Transcription</FormLabel>
                     <FormControl>
                       <Textarea
                         placeholder="Enter the exact text spoken in the audio..."

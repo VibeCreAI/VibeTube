@@ -14,6 +14,7 @@ import numpy as np
 
 from .base import (
     combine_voice_prompts as _combine_voice_prompts,
+    force_hf_offline_if_cached,
     get_torch_device,
     is_model_cached,
     model_load_progress,
@@ -79,11 +80,13 @@ class ChatterboxTTSBackend:
                 with ChatterboxTTSBackend._load_lock:
                     torch.load = _patched_load
                     try:
-                        model = ChatterboxMultilingualTTS.from_pretrained(device=device)
+                        with force_hf_offline_if_cached(is_cached):
+                            model = ChatterboxMultilingualTTS.from_pretrained(device=device)
                     finally:
                         torch.load = original_torch_load
             else:
-                model = ChatterboxMultilingualTTS.from_pretrained(device=device)
+                with force_hf_offline_if_cached(is_cached):
+                    model = ChatterboxMultilingualTTS.from_pretrained(device=device)
 
             transformer = model.t3.tfmr
             if hasattr(transformer, "config") and hasattr(transformer.config, "_attn_implementation"):

@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Download, Loader2, Trash2 } from 'lucide-react';
+import { Check, Download, Loader2, Trash2 } from 'lucide-react';
 import { useCallback, useState } from 'react';
+import type { WhisperModelSize } from '@/lib/constants/tts';
+import { getPreferredWhisperModel, setPreferredWhisperModel } from '@/lib/utils/vibetubeSettings';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -18,11 +20,32 @@ import { useToast } from '@/components/ui/use-toast';
 import { apiClient } from '@/lib/api/client';
 import { useModelDownloadToast } from '@/lib/hooks/useModelDownloadToast';
 
+const TTS_DESCRIPTIONS: Record<string, string> = {
+  'qwen-tts-1.7B': 'High-quality multilingual voice cloning with natural prosody. Supports delivery instructions — control tone, pace, and emotion with natural language. 10 languages, ~3.5 GB.',
+  'qwen-tts-0.6B': 'Faster, lighter Qwen TTS variant. Good quality with instruct support. Best when VRAM is limited. 10 languages, ~1.2 GB.',
+  'luxtts': 'Ultra-fast, CPU-friendly voice cloning at 48kHz. Exceeds 150x realtime on CPU with ~1 GB VRAM. The fastest engine for quick iterations. English only.',
+  'chatterbox-tts': 'Production-grade voice cloning with broad language support. Zero-shot cloning and emotion exaggeration control. 23 languages, ~3.2 GB.',
+  'chatterbox-turbo': 'Lightweight and fast. Supports paralinguistic tags — embed [laugh], [sigh], [gasp] and more in text for expressive, natural speech. English only, ~1.5 GB.',
+};
+
+const WHISPER_DESCRIPTIONS: Record<string, string> = {
+  'whisper-base': 'Fastest, ~74 MB. Good for quick drafts on low-end hardware.',
+  'whisper-small': 'Fast with decent accuracy, ~244 MB. Good for simple content.',
+  'whisper-medium': 'Balanced accuracy and speed, ~769 MB. Suitable for most use cases.',
+  'whisper-large': 'Highest accuracy, ~2.9 GB. Best for complex or multilingual audio.',
+  'whisper-turbo': 'Best speed/accuracy tradeoff, ~809 MB. Recommended for most use cases.',
+};
+
+const WHISPER_RECOMMENDED = 'whisper-turbo';
+
 export function ModelManagement() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
   const [downloadingDisplayName, setDownloadingDisplayName] = useState<string | null>(null);
+  const [preferredWhisper, setPreferredWhisper] = useState<WhisperModelSize | null>(
+    () => getPreferredWhisperModel(),
+  );
 
   const { data: modelStatus, isLoading } = useQuery({
     queryKey: ['modelStatus'],
@@ -64,6 +87,11 @@ export function ModelManagement() {
     displayName: string;
     sizeMb?: number;
   } | null>(null);
+
+  const handleSelectWhisper = (modelSize: WhisperModelSize) => {
+    setPreferredWhisperModel(modelSize);
+    setPreferredWhisper(modelSize);
+  };
 
   const handleDownload = async (modelName: string) => {
     console.log('[Download] Button clicked for:', modelName, 'at', new Date().toISOString());
@@ -180,6 +208,7 @@ export function ModelManagement() {
                       }}
                       isDownloading={downloadingModel === model.model_name}
                       formatSize={formatSize}
+                      description={TTS_DESCRIPTIONS[model.model_name]}
                     />
                   ))}
               </div>
@@ -208,6 +237,14 @@ export function ModelManagement() {
                       }}
                       isDownloading={downloadingModel === model.model_name}
                       formatSize={formatSize}
+                      description={WHISPER_DESCRIPTIONS[model.model_name]}
+                      isRecommended={model.model_name === WHISPER_RECOMMENDED}
+                      isSelected={preferredWhisper === model.model_size}
+                      onSelect={
+                        model.model_size
+                          ? () => handleSelectWhisper(model.model_size as WhisperModelSize)
+                          : undefined
+                      }
                     />
                   ))}
               </div>
@@ -275,41 +312,75 @@ interface ModelItemProps {
   onDelete: () => void;
   isDownloading: boolean;  // Local state - true if user just clicked download
   formatSize: (sizeMb?: number) => string;
+  description?: string;
+  isRecommended?: boolean;
+  isSelected?: boolean;
+  onSelect?: () => void;
 }
 
-function ModelItem({ model, onDownload, onDelete, isDownloading, formatSize }: ModelItemProps) {
+function ModelItem({
+  model,
+  onDownload,
+  onDelete,
+  isDownloading,
+  formatSize,
+  description,
+  isRecommended,
+  isSelected,
+  onSelect,
+}: ModelItemProps) {
   // Use server's downloading state OR local state (for immediate feedback before server updates)
   const showDownloading = model.downloading || isDownloading;
-  
+
   return (
-    <div className="flex items-center justify-between p-3 border rounded-lg">
-      <div className="flex-1">
-        <div className="flex items-center gap-2">
+    <div className={`flex items-center justify-between p-3 border rounded-lg ${isSelected ? 'border-primary bg-primary/5' : ''}`}>
+      <div className="flex-1 min-w-0 mr-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <span className="font-medium text-sm">{model.display_name}</span>
-          {model.loaded && (
+          {isRecommended && (
+            <Badge variant="outline" className="text-xs border-primary text-primary">
+              Recommended
+            </Badge>
+          )}
+          {isSelected && (
             <Badge variant="default" className="text-xs">
+              Active
+            </Badge>
+          )}
+          {model.loaded && !isSelected && (
+            <Badge variant="secondary" className="text-xs">
               Loaded
             </Badge>
           )}
-          {/* Only show Downloaded if actually downloaded AND not downloading */}
-          {model.downloaded && !model.loaded && !showDownloading && (
-            <Badge variant="secondary" className="text-xs">
+          {model.downloaded && !model.loaded && !showDownloading && !isSelected && (
+            <Badge variant="outline" className="text-xs">
               Downloaded
             </Badge>
           )}
         </div>
+        {description && (
+          <div className="text-xs text-muted-foreground mt-0.5">{description}</div>
+        )}
         {model.downloaded && model.size_mb && !showDownloading && (
-          <div className="text-xs text-muted-foreground mt-1">
-            Size: {formatSize(model.size_mb)}
+          <div className="text-xs text-muted-foreground mt-0.5">
+            On disk: {formatSize(model.size_mb)}
           </div>
         )}
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 shrink-0">
+        {onSelect && !isSelected && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={onSelect}
+            title="Set as active transcription model"
+          >
+            <Check className="h-4 w-4 mr-1" />
+            Use
+          </Button>
+        )}
         {model.downloaded && !showDownloading ? (
           <div className="flex items-center gap-2">
-            <div className="flex items-center gap-1 text-sm text-muted-foreground">
-              <span>Ready</span>
-            </div>
             <Button
               size="sm"
               onClick={onDelete}

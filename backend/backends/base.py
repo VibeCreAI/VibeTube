@@ -6,6 +6,7 @@ voice prompt combination, and model loading progress tracking.
 """
 
 import logging
+import os
 import platform
 from contextlib import contextmanager
 from pathlib import Path
@@ -30,34 +31,84 @@ def is_model_cached(
     """
     Check if a HuggingFace model is fully cached locally.
     """
+    return (
+        get_cached_snapshot_path(
+            hf_repo,
+            weight_extensions=weight_extensions,
+            required_files=required_files,
+        )
+        is not None
+    )
+
+
+def get_cached_snapshot_path(
+    hf_repo: str,
+    *,
+    weight_extensions: tuple[str, ...] = (".safetensors", ".bin"),
+    required_files: Optional[list[str]] = None,
+) -> Optional[Path]:
+    """
+    Return a local cached snapshot path for a Hugging Face repo if one is usable.
+    """
     try:
         from huggingface_hub import constants as hf_constants
 
         repo_cache = Path(hf_constants.HF_HUB_CACHE) / ("models--" + hf_repo.replace("/", "--"))
         if not repo_cache.exists():
-            return False
+            return None
 
         blobs_dir = repo_cache / "blobs"
         if blobs_dir.exists() and any(blobs_dir.glob("*.incomplete")):
             logger.debug("Found incomplete blobs for %s", hf_repo)
-            return False
+            return None
 
         snapshots_dir = repo_cache / "snapshots"
         if not snapshots_dir.exists():
-            return False
+            return None
 
-        if required_files:
-            return all(any(snapshots_dir.rglob(name)) for name in required_files)
+        def _snapshot_is_usable(snapshot_dir: Path) -> bool:
+            if not snapshot_dir.exists() or not snapshot_dir.is_dir():
+                return False
 
-        for ext in weight_extensions:
-            if any(snapshots_dir.rglob(f"*{ext}")):
-                return True
+            if required_files:
+                for required in required_files:
+                    if not any(snapshot_dir.rglob(required)):
+                        return False
 
-        logger.debug("No model weights found for %s", hf_repo)
-        return False
+            has_weights = any(any(snapshot_dir.rglob(f"*{ext}")) for ext in weight_extensions)
+            if not has_weights:
+                return False
+
+            return True
+
+        candidates: list[Path] = []
+        refs_main = repo_cache / "refs" / "main"
+        if refs_main.exists():
+            revision = refs_main.read_text(encoding="utf-8").strip()
+            if revision:
+                candidates.append(snapshots_dir / revision)
+
+        for snapshot_dir in sorted(
+            snapshots_dir.iterdir(),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        ):
+            candidates.append(snapshot_dir)
+
+        seen: set[Path] = set()
+        for candidate in candidates:
+            resolved = candidate.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            if _snapshot_is_usable(candidate):
+                return candidate
+
+        logger.debug("No complete cached snapshot found for %s", hf_repo)
+        return None
     except Exception as exc:
-        logger.warning("Error checking cache for %s: %s", hf_repo, exc)
-        return False
+        logger.warning("Error resolving cache snapshot for %s: %s", hf_repo, exc)
+        return None
 
 
 def get_torch_device(
@@ -184,3 +235,72 @@ def patch_chatterbox_f32(model) -> None:
         return original_ve_forward(self_voice_encoder, mels.float())
 
     voice_encoder.forward = types.MethodType(_f32_ve_forward, voice_encoder)
+
+
+@contextmanager
+def force_hf_offline_if_cached(is_cached: bool):
+    """
+    Force Hugging Face/Transformers offline mode while loading already-cached models.
+
+    Some upstream loaders still make metadata HEAD requests even when files are local.
+    This prevents runtime network access for cached model loads.
+    """
+    if not is_cached:
+        yield
+        return
+
+    previous_hf_env = os.environ.get("HF_HUB_OFFLINE")
+    previous_tf_env = os.environ.get("TRANSFORMERS_OFFLINE")
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+
+    previous_hf_constant = None
+    hf_constant_patched = False
+    try:
+        import huggingface_hub.constants as hf_constants
+
+        previous_hf_constant = getattr(hf_constants, "HF_HUB_OFFLINE", None)
+        hf_constants.HF_HUB_OFFLINE = True
+        hf_constant_patched = True
+    except Exception:
+        pass
+
+    previous_tf_offline = None
+    tf_offline_patched = False
+    try:
+        import transformers.utils.hub as tf_hub
+
+        previous_tf_offline = getattr(tf_hub, "_is_offline_mode", None)
+        tf_hub._is_offline_mode = True
+        tf_offline_patched = True
+    except Exception:
+        pass
+
+    try:
+        yield
+    finally:
+        if previous_hf_env is None:
+            os.environ.pop("HF_HUB_OFFLINE", None)
+        else:
+            os.environ["HF_HUB_OFFLINE"] = previous_hf_env
+
+        if previous_tf_env is None:
+            os.environ.pop("TRANSFORMERS_OFFLINE", None)
+        else:
+            os.environ["TRANSFORMERS_OFFLINE"] = previous_tf_env
+
+        if hf_constant_patched:
+            try:
+                import huggingface_hub.constants as hf_constants
+
+                hf_constants.HF_HUB_OFFLINE = previous_hf_constant
+            except Exception:
+                pass
+
+        if tf_offline_patched:
+            try:
+                import transformers.utils.hub as tf_hub
+
+                tf_hub._is_offline_mode = previous_tf_offline
+            except Exception:
+                pass

@@ -10,7 +10,13 @@ from typing import List, Optional, Tuple
 import numpy as np
 
 from . import LANGUAGE_CODE_TO_NAME, STTBackend, TTSBackend, WHISPER_HF_REPOS
-from .base import combine_voice_prompts as _combine_voice_prompts, is_model_cached, model_load_progress
+from .base import (
+    combine_voice_prompts as _combine_voice_prompts,
+    force_hf_offline_if_cached,
+    get_cached_snapshot_path,
+    is_model_cached,
+    model_load_progress,
+)
 from ..utils.cache import cache_voice_prompt, get_cache_key, get_cached_voice_prompt
 
 logger = logging.getLogger(__name__)
@@ -30,7 +36,7 @@ class MLXTTSBackend:
     def _get_model_path(self, model_size: str) -> str:
         model_map = {
             "1.7B": "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16",
-            "0.6B": "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16",
+            "0.6B": "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-bf16",
         }
         if model_size not in model_map:
             raise ValueError(f"Unknown model size: {model_size}")
@@ -54,15 +60,26 @@ class MLXTTSBackend:
     load_model = load_model_async
 
     def _load_model_sync(self, model_size: str):
-        model_path = self._get_model_path(model_size)
+        model_ref = self._get_model_path(model_size)
+        model_source = model_ref
         model_name = f"qwen-tts-{model_size}"
         is_cached = self._is_model_cached(model_size)
+
+        if is_cached:
+            snapshot_path = get_cached_snapshot_path(
+                model_ref,
+                weight_extensions=(".safetensors", ".bin", ".npz"),
+            )
+            if snapshot_path is not None:
+                model_source = str(snapshot_path)
+                logger.info("Using local cached snapshot for %s: %s", model_ref, model_source)
 
         with model_load_progress(model_name, is_cached):
             from mlx_audio.tts import load
 
             logger.info("Loading MLX TTS model %s...", model_size)
-            self.model = load(model_path)
+            with force_hf_offline_if_cached(is_cached):
+                self.model = load(model_source)
 
         self._current_model_size = model_size
         self.model_size = model_size
@@ -188,7 +205,8 @@ class MLXSTTBackend:
 
             model_name = WHISPER_HF_REPOS.get(model_size, f"openai/whisper-{model_size}")
             logger.info("Loading MLX Whisper model %s...", model_size)
-            self.model = load(model_name)
+            with force_hf_offline_if_cached(is_cached):
+                self.model = load(model_name)
 
         self.model_size = model_size
         logger.info("MLX Whisper model %s loaded successfully", model_size)

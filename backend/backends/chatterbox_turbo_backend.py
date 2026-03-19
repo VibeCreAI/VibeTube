@@ -14,6 +14,7 @@ import numpy as np
 
 from .base import (
     combine_voice_prompts as _combine_voice_prompts,
+    force_hf_offline_if_cached,
     get_torch_device,
     is_model_cached,
     model_load_progress,
@@ -70,11 +71,13 @@ class ChatterboxTurboTTSBackend:
             self._device = device
             logger.info("Loading Chatterbox Turbo on %s...", device)
 
-            local_path = snapshot_download(
-                repo_id=CHATTERBOX_TURBO_HF_REPO,
-                token=None,
-                allow_patterns=["*.safetensors", "*.json", "*.txt", "*.pt", "*.model"],
-            )
+            with force_hf_offline_if_cached(is_cached):
+                local_path = snapshot_download(
+                    repo_id=CHATTERBOX_TURBO_HF_REPO,
+                    token=None,
+                    allow_patterns=["*.safetensors", "*.json", "*.txt", "*.pt", "*.model"],
+                    local_files_only=is_cached,
+                )
 
             if device == "cpu":
                 original_torch_load = torch.load

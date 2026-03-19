@@ -46,6 +46,7 @@ export interface GenerationResponse {
   language: string;
   engine: TTSEngine;
   model_size: TTSModelSize;
+  source_type?: 'ai' | 'recording';
   audio_path: string;
   duration: number;
   seed?: number;
@@ -177,6 +178,7 @@ export interface StoryItemDetail {
   language: string;
   engine: TTSEngine;
   model_size: TTSModelSize;
+  source_type?: 'ai' | 'recording';
   audio_path: string;
   duration: number;
   seed?: number;

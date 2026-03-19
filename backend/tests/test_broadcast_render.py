@@ -1,4 +1,3 @@
-import asyncio
 import json
 from io import BytesIO
 from pathlib import Path
@@ -6,6 +5,9 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from backend import main
+from backend.database import Generation as DBGeneration
+from backend.database import VoiceProfile as DBVoiceProfile
+from backend.routes import vibetube as vibetube_routes
 
 
 class _FakeQuery:
@@ -25,9 +27,9 @@ class _FakeDB:
         self.generation = generation
 
     def query(self, model):
-        if model is main.DBVoiceProfile:
+        if model in {main.DBVoiceProfile, DBVoiceProfile}:
             return _FakeQuery(self.profile)
-        if model is main.DBGeneration:
+        if model is DBGeneration:
             return _FakeQuery(self.generation)
         raise AssertionError(f"Unexpected model query: {model}")
 
@@ -63,7 +65,7 @@ def test_render_audio_rejects_incomplete_avatar_pack(monkeypatch, tmp_path):
     pack_dir = tmp_path / "profiles" / profile.id / "vibetube_avatar"
 
     monkeypatch.setattr(main.config, "get_data_dir", lambda: data_dir)
-    monkeypatch.setattr(main, "_vibetube_avatar_pack_dir", lambda _profile_id: pack_dir)
+    monkeypatch.setattr(vibetube_routes, "_vibetube_avatar_pack_dir", lambda _profile_id: pack_dir)
 
     main.app.dependency_overrides[main.get_db] = _override_db(fake_db)
     client = TestClient(main.app)
@@ -88,7 +90,7 @@ def test_render_audio_creates_broadcast_job(monkeypatch, tmp_path):
     _write_complete_pack(pack_dir)
 
     monkeypatch.setattr(main.config, "get_data_dir", lambda: data_dir)
-    monkeypatch.setattr(main, "_vibetube_avatar_pack_dir", lambda _profile_id: pack_dir)
+    monkeypatch.setattr(vibetube_routes, "_vibetube_avatar_pack_dir", lambda _profile_id: pack_dir)
 
     def _fake_render_overlay(*, output_dir: Path, text=None, **_kwargs):
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -113,7 +115,7 @@ def test_render_audio_creates_broadcast_job(monkeypatch, tmp_path):
             "preferred_export_format": "webm",
         }
 
-    monkeypatch.setattr(main.vibetube, "render_overlay", _fake_render_overlay)
+    monkeypatch.setattr(vibetube_routes.vibetube, "render_overlay", _fake_render_overlay)
 
     main.app.dependency_overrides[main.get_db] = _override_db(fake_db)
     client = TestClient(main.app)
@@ -163,10 +165,17 @@ def test_list_vibetube_jobs_backfills_source_kind(monkeypatch, tmp_path):
 
     monkeypatch.setattr(main.config, "get_data_dir", lambda: tmp_path / "data")
 
-    jobs = asyncio.run(main.list_vibetube_jobs(_FakeDB()))
-    jobs_by_id = {job.job_id: job for job in jobs}
+    main.app.dependency_overrides[main.get_db] = _override_db(_FakeDB())
+    client = TestClient(main.app)
+    try:
+        response = client.get("/vibetube/jobs")
+    finally:
+        main.app.dependency_overrides.clear()
 
-    assert jobs_by_id["story-job"].source_kind == "story"
-    assert jobs_by_id["generation-job"].source_kind == "generation"
-    assert jobs_by_id["broadcast-job"].source_kind == "broadcast_recording"
-    assert jobs_by_id["broadcast-job"].source_profile_id == "profile-1"
+    assert response.status_code == 200
+    jobs_by_id = {job["job_id"]: job for job in response.json()}
+
+    assert jobs_by_id["story-job"]["source_kind"] == "story"
+    assert jobs_by_id["generation-job"]["source_kind"] == "generation"
+    assert jobs_by_id["broadcast-job"]["source_kind"] == "broadcast_recording"
+    assert jobs_by_id["broadcast-job"]["source_profile_id"] == "profile-1"

@@ -15,6 +15,17 @@ if _custom_models_dir:
     os.environ["HF_HUB_CACHE"] = _custom_models_dir
     print(f"[config] Model download path set to: {_custom_models_dir}")
 
+_strict_offline = os.environ.get("VIBETUBE_STRICT_OFFLINE", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+if _strict_offline:
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    print("[config] Strict offline mode enabled (HF_HUB_OFFLINE=1, TRANSFORMERS_OFFLINE=1)")
+
 # Default data directory (used in development)
 _data_dir = Path("data")
 

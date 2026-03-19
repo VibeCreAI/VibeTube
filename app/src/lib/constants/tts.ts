@@ -8,6 +8,7 @@ export type TTSEngine = 'qwen' | 'luxtts' | 'chatterbox' | 'chatterbox_turbo';
 export type TTSModelSize = '1.7B' | '0.6B' | 'default';
 export type QwenModelSize = Extract<TTSModelSize, '1.7B' | '0.6B'>;
 export type WhisperModelSize = 'base' | 'small' | 'medium' | 'large' | 'turbo';
+export type GenerationSourceType = 'ai' | 'recording';
 
 export interface TtsEngineOption {
   value: TTSEngine;
@@ -267,6 +268,34 @@ export function getModelDisplayNameForSelection(
 ): string {
   const modelName = getModelNameForSelection(engine, modelSize);
   return MODEL_DISPLAY_NAMES[modelName] ?? modelName;
+}
+
+export function getGenerationAudioLabel(options: {
+  engine?: string | null;
+  modelSize?: string | null;
+  sourceType?: string | null;
+}): string {
+  if (options.sourceType === 'recording') {
+    return 'Recorded';
+  }
+
+  const engine = options.engine as TTSEngine | undefined;
+  const modelSize = options.modelSize as TTSModelSize | undefined;
+
+  if (engine === 'qwen') {
+    return modelSize === '0.6B' ? 'Qwen 0.6B' : 'Qwen 1.7B';
+  }
+  if (engine === 'luxtts') {
+    return 'LuxTTS';
+  }
+  if (engine === 'chatterbox') {
+    return 'Chatterbox';
+  }
+  if (engine === 'chatterbox_turbo') {
+    return 'Chatterbox Turbo';
+  }
+
+  return 'Unknown';
 }
 
 export function getEffectiveModelSize(

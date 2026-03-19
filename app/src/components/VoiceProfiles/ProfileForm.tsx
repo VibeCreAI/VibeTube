@@ -578,6 +578,22 @@ export function ProfileForm() {
   }, [form, recordingPromptMode, sampleMode, selectedLanguage]);
 
   useEffect(() => {
+    if (sampleMode === 'record' && recordingPromptMode === 'script') {
+      return;
+    }
+
+    const scriptText = getVoiceSampleScript(selectedLanguage).trim();
+    const currentText = (form.getValues('referenceText') || '').trim();
+
+    // When switching away from script mode, clear the auto-filled script so
+    // transcription starts blank in custom/upload/system flows.
+    if (currentText && currentText === scriptText) {
+      form.setValue('referenceText', '', { shouldValidate: false, shouldDirty: false });
+      form.clearErrors('referenceText');
+    }
+  }, [form, recordingPromptMode, sampleMode, selectedLanguage]);
+
+  useEffect(() => {
     if (!open || !editingProfileId) {
       setHasSavedVibeTubePack(false);
       setHasPendingGeneratedPreview(false);
@@ -1153,7 +1169,7 @@ export function ProfileForm() {
           });
           toast({
             title: 'Reference text required',
-            description: 'Please provide the reference text for the audio sample.',
+            description: 'Please provide the transcription for the audio sample.',
             variant: 'destructive',
           });
           return;
@@ -1546,7 +1562,7 @@ export function ProfileForm() {
                         />
                       ) : (
                         <p className="text-sm text-muted-foreground">
-                          Sample script mode fills the reference text automatically, so
+                          Sample script mode fills the transcription automatically, so
                           transcription is not needed.
                         </p>
                       )}
@@ -1557,7 +1573,7 @@ export function ProfileForm() {
                           name="referenceText"
                           render={({ field }) => (
                             <FormItem>
-                              <FormLabel>Reference Text</FormLabel>
+                              <FormLabel>Transcription</FormLabel>
                               <FormControl>
                                 <Textarea
                                   placeholder="Enter the exact text spoken in the audio..."

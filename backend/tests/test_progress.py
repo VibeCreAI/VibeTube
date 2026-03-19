@@ -15,8 +15,14 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 
-from utils.progress import ProgressManager, get_progress_manager
-from utils.hf_progress import HFProgressTracker, create_hf_progress_callback
+try:
+    # Works when tests run from repository root (e.g., pytest backend/tests)
+    from backend.utils.progress import ProgressManager, get_progress_manager
+    from backend.utils.hf_progress import HFProgressTracker, create_hf_progress_callback
+except ImportError:
+    # Fallback for legacy/manual execution from backend package root
+    from utils.progress import ProgressManager, get_progress_manager
+    from utils.hf_progress import HFProgressTracker, create_hf_progress_callback
 
 
 pytestmark = pytest.mark.asyncio

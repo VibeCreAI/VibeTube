@@ -7,9 +7,12 @@ export function useGeneration() {
 
   return useMutation({
     mutationFn: (data: GenerationRequest) => apiClient.generateSpeech(data),
-    onSuccess: () => {
-      // Invalidate history to show new generation
-      queryClient.invalidateQueries({ queryKey: ['history'] });
+    onSuccess: async () => {
+      // Force active history queries to refresh after generation completion.
+      await queryClient.invalidateQueries({
+        queryKey: ['history'],
+        refetchType: 'active',
+      });
     },
   });
 }

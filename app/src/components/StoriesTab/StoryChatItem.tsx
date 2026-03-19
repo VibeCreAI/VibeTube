@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Textarea } from '@/components/ui/textarea';
 import type { StoryItemDetail } from '@/lib/api/types';
+import { getGenerationAudioLabel } from '@/lib/constants/tts';
 import { cn } from '@/lib/utils/cn';
 import { useServerStore } from '@/stores/serverStore';
 
@@ -54,9 +55,29 @@ export function StoryChatItem({
     item.start_time_ms +
     Math.max(0, item.duration * 1000 - (item.trim_start_ms || 0) - (item.trim_end_ms || 0));
   const isCurrentlyPlaying = isPlaying && currentTimeMs >= itemStartMs && currentTimeMs < itemEndMs;
+  // Exclusive highlight behavior:
+  // - During playback: highlight only the currently playing item.
+  // - When not playing: highlight the manually selected item.
+  const isCyanHighlighted = isCurrentlyPlaying || (!isPlaying && isSelected);
+  const generationLabel = getGenerationAudioLabel({
+    engine: item.engine,
+    modelSize: item.model_size,
+    sourceType: item.source_type,
+  });
 
   const handlePlay = () => {
+    onSelect?.();
     onPlayFromHere();
+  };
+
+  const handleRegenerate = () => {
+    onSelect?.();
+    onRegenerate();
+  };
+
+  const handleRemove = () => {
+    onSelect?.();
+    onRemove();
   };
 
   const formatTime = (ms: number): string => {
@@ -72,9 +93,8 @@ export function StoryChatItem({
     <div
       className={cn(
         'flex items-start gap-3 p-4 rounded-lg border transition-colors',
-        isCurrentlyPlaying && 'bg-muted/70 border-primary',
-        !isCurrentlyPlaying && !isSelected && 'hover:bg-muted/50',
-        isSelected && 'bg-muted/60 border-accent ring-1 ring-accent/50',
+        isCyanHighlighted && 'bg-muted/70 border-cyan-400 ring-2 ring-cyan-400/70',
+        !isCyanHighlighted && 'hover:bg-muted/50',
         isDragging && 'opacity-50 shadow-lg',
       )}
       role={onSelect ? 'button' : undefined}
@@ -123,6 +143,9 @@ export function StoryChatItem({
         <div className="flex items-center gap-2 mb-2">
           <span className="font-medium text-sm">{item.profile_name}</span>
           <span className="text-xs text-muted-foreground">{item.language}</span>
+          <span className="rounded-full border border-border/70 bg-background/70 px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+            {generationLabel}
+          </span>
           <span className="text-xs text-muted-foreground tabular-nums ml-auto">
             {formatTime(itemStartMs)}
           </span>
@@ -148,12 +171,12 @@ export function StoryChatItem({
               <Play className="mr-2 h-4 w-4" />
               Play from here
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={onRegenerate} disabled={isRegenerating}>
+            <DropdownMenuItem onClick={handleRegenerate} disabled={isRegenerating}>
               <RefreshCw className="mr-2 h-4 w-4" />
               {isRegenerating ? 'Regenerating...' : 'Regenerate'}
             </DropdownMenuItem>
             <DropdownMenuItem
-              onClick={onRemove}
+              onClick={handleRemove}
               className="text-destructive focus:text-destructive"
             >
               <Trash2 className="mr-2 h-4 w-4" />

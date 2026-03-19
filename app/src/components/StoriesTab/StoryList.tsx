@@ -206,7 +206,9 @@ export function StoryList({ onOpenBatchCreate }: StoryListProps) {
               key={story.id}
               className={cn(
                 'h-24 p-4 border rounded-2xl transition-colors group flex items-center',
-                selectedStoryId === story.id && 'bg-muted border-primary',
+                selectedStoryId === story.id
+                  ? 'bg-muted/70 border-cyan-400 ring-2 ring-cyan-400/70'
+                  : 'hover:bg-muted/50',
               )}
             >
               <div className="flex items-start justify-between gap-2 w-full min-w-0">

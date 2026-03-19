@@ -12,6 +12,7 @@ import numpy as np
 
 from .base import (
     combine_voice_prompts as _combine_voice_prompts,
+    force_hf_offline_if_cached,
     get_torch_device,
     is_model_cached,
     model_load_progress,
@@ -21,6 +22,7 @@ from ..utils.cache import cache_voice_prompt, get_cache_key, get_cached_voice_pr
 logger = logging.getLogger(__name__)
 
 LUXTTS_HF_REPO = "YatharthS/LuxTTS"
+LUXTTS_WHISPER_DEP_REPO = "openai/whisper-tiny"
 
 
 class LuxTTSBackend:
@@ -47,9 +49,16 @@ class LuxTTSBackend:
         return LUXTTS_HF_REPO
 
     def _is_model_cached(self, model_size: str = "default") -> bool:
-        return is_model_cached(
+        core_cached = is_model_cached(
             LUXTTS_HF_REPO,
             weight_extensions=(".pt", ".safetensors", ".onnx", ".bin"),
+        )
+        if not core_cached:
+            return False
+        # ZipVoice internally depends on Whisper Tiny for prompt transcription.
+        return is_model_cached(
+            LUXTTS_WHISPER_DEP_REPO,
+            weight_extensions=(".safetensors", ".bin", ".pt"),
         )
 
     async def load_model(self, model_size: str = "default") -> None:
@@ -66,17 +75,18 @@ class LuxTTSBackend:
 
             device = self.device
             logger.info("Loading LuxTTS on %s...", device)
-            if device == "cpu":
-                import os
+            with force_hf_offline_if_cached(is_cached):
+                if device == "cpu":
+                    import os
 
-                threads = os.cpu_count() or 4
-                self.model = LuxTTS(
-                    model_path=LUXTTS_HF_REPO,
-                    device="cpu",
-                    threads=min(threads, 8),
-                )
-            else:
-                self.model = LuxTTS(model_path=LUXTTS_HF_REPO, device=device)
+                    threads = os.cpu_count() or 4
+                    self.model = LuxTTS(
+                        model_path=LUXTTS_HF_REPO,
+                        device="cpu",
+                        threads=min(threads, 8),
+                    )
+                else:
+                    self.model = LuxTTS(model_path=LUXTTS_HF_REPO, device=device)
 
         logger.info("LuxTTS loaded successfully")
 
@@ -146,7 +156,14 @@ class LuxTTSBackend:
                 speed=1.0,
                 return_smooth=False,
             )
-            audio = wav.detach().cpu().numpy().squeeze()
+            if isinstance(wav, torch.Tensor):
+                audio = wav.squeeze().detach().cpu().numpy().astype(np.float32)
+            else:
+                audio = np.asarray(wav, dtype=np.float32).squeeze()
+            if audio.size == 0:
+                raise ValueError("LuxTTS generated empty audio output")
+            if not np.isfinite(audio).all():
+                raise ValueError("LuxTTS generated invalid audio values")
             return audio, 48000
 
         return await asyncio.to_thread(_generate_sync)

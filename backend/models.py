@@ -157,6 +157,7 @@ class GenerationResponse(BaseModel):
     language: str
     engine: str
     model_size: str
+    source_type: str = "ai"
     audio_path: str
     duration: float
     seed: Optional[int]
@@ -303,6 +304,7 @@ class HistoryResponse(BaseModel):
     language: str
     engine: str
     model_size: str
+    source_type: str = "ai"
     audio_path: str
     duration: float
     seed: Optional[int]
@@ -485,6 +487,7 @@ class StoryItemDetail(BaseModel):
     language: str
     engine: str
     model_size: str
+    source_type: str = "ai"
     audio_path: str
     duration: float
     seed: Optional[int]

@@ -54,7 +54,7 @@ export function SettingsTab({ initialSection = 'vibetube' }: SettingsTabProps) {
         <TabsContent value="audio" className="flex-1 min-h-0 overflow-hidden mt-0 px-2">
           <AudioTab />
         </TabsContent>
-        <TabsContent value="models" className="flex-1 min-h-0 overflow-hidden mt-0 px-2">
+        <TabsContent value="models" className="flex-1 min-h-0 overflow-y-auto mt-0 px-2">
           <ModelsTab />
         </TabsContent>
         <TabsContent value="server" className="flex-1 min-h-0 overflow-hidden mt-0 px-2">

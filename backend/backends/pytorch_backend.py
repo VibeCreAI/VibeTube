@@ -12,6 +12,8 @@ import torch
 from . import LANGUAGE_CODE_TO_NAME, STTBackend, TTSBackend, WHISPER_HF_REPOS
 from .base import (
     combine_voice_prompts as _combine_voice_prompts,
+    force_hf_offline_if_cached,
+    get_cached_snapshot_path,
     get_torch_device,
     is_model_cached,
     model_load_progress,
@@ -66,25 +68,35 @@ class PyTorchTTSBackend:
     def _load_model_sync(self, model_size: str):
         model_name = f"qwen-tts-{model_size}"
         is_cached = self._is_model_cached(model_size)
+        model_ref = self._get_model_path(model_size)
+        model_source = model_ref
+
+        if is_cached:
+            snapshot_path = get_cached_snapshot_path(model_ref)
+            if snapshot_path is not None:
+                model_source = str(snapshot_path)
+                logger.info("Using local cached snapshot for %s: %s", model_ref, model_source)
 
         with model_load_progress(model_name, is_cached):
             from qwen_tts import Qwen3TTSModel
 
-            model_path = self._get_model_path(model_size)
             logger.info("Loading TTS model %s on %s...", model_size, self.device)
 
-            if self.device == "cpu":
-                self.model = Qwen3TTSModel.from_pretrained(
-                    model_path,
-                    torch_dtype=torch.float32,
-                    low_cpu_mem_usage=False,
-                )
-            else:
-                self.model = Qwen3TTSModel.from_pretrained(
-                    model_path,
-                    device_map=self.device,
-                    torch_dtype=torch.bfloat16,
-                )
+            with force_hf_offline_if_cached(is_cached):
+                if self.device == "cpu":
+                    self.model = Qwen3TTSModel.from_pretrained(
+                        model_source,
+                        torch_dtype=torch.float32,
+                        low_cpu_mem_usage=False,
+                        local_files_only=is_cached,
+                    )
+                else:
+                    self.model = Qwen3TTSModel.from_pretrained(
+                        model_source,
+                        device_map=self.device,
+                        torch_dtype=torch.bfloat16,
+                        local_files_only=is_cached,
+                    )
 
         self._current_model_size = model_size
         self.model_size = model_size
@@ -200,8 +212,15 @@ class PyTorchSTTBackend:
 
             model_name = WHISPER_HF_REPOS.get(model_size, f"openai/whisper-{model_size}")
             logger.info("Loading Whisper model %s on %s...", model_size, self.device)
-            self.processor = WhisperProcessor.from_pretrained(model_name)
-            self.model = WhisperForConditionalGeneration.from_pretrained(model_name)
+            with force_hf_offline_if_cached(is_cached):
+                self.processor = WhisperProcessor.from_pretrained(
+                    model_name,
+                    local_files_only=is_cached,
+                )
+                self.model = WhisperForConditionalGeneration.from_pretrained(
+                    model_name,
+                    local_files_only=is_cached,
+                )
 
         self.model.to(self.device)
         self.model_size = model_size

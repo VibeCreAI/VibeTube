@@ -35,6 +35,7 @@ import type {
   VibeTubeExportFormat,
   VibeTubeJobResponse,
 } from '@/lib/api/types';
+import type { LanguageCode } from '@/lib/constants/languages';
 import {
   engineSupportsInstruct,
   getGenerationModelOptions,
@@ -44,7 +45,6 @@ import {
   getModelNameForSelection,
   getModelSelectionFromName,
 } from '@/lib/constants/tts';
-import type { LanguageCode } from '@/lib/constants/languages';
 import { useGenerationForm } from '@/lib/hooks/useGenerationForm';
 import { useHistory } from '@/lib/hooks/useHistory';
 import { useProfiles } from '@/lib/hooks/useProfiles';
@@ -250,7 +250,13 @@ export function StoryContent() {
       shouldDirty: true,
       shouldValidate: true,
     });
-  }, [generateForm, profiles, selectedGenerateModel.engine, selectedGenerateModel.modelSize, selectedProfileId]);
+  }, [
+    generateForm,
+    profiles,
+    selectedGenerateModel.engine,
+    selectedGenerateModel.modelSize,
+    selectedProfileId,
+  ]);
 
   // Use playback hook
   useStoryPlayback(story?.items);
@@ -338,6 +344,14 @@ export function StoryContent() {
     setEditingItemId(itemId);
   };
 
+  const resyncActiveStoryPlayback = (storyId: string) => {
+    const playbackState = useStoryStore.getState();
+    if (!playbackState.isPlaying || playbackState.playbackStoryId !== storyId) {
+      return;
+    }
+    playbackState.seek(playbackState.currentTimeMs);
+  };
+
   const handleRegenerateSubmit = (data: StoryItemRegenerateRequest) => {
     if (!story || !editingItemId) return;
 
@@ -367,6 +381,7 @@ export function StoryContent() {
           }
         },
         onSuccess: () => {
+          resyncActiveStoryPlayback(story.id);
           setEditingItemId(null);
           setRegenerateStatusMessage('');
           toast({
@@ -515,8 +530,8 @@ export function StoryContent() {
   const handlePlayFromItem = (itemStartMs: number) => {
     if (!story) return;
 
-    seek(itemStartMs);
     play(story.id, sortedItems);
+    seek(itemStartMs);
   };
 
   const handleRenderStoryVibeTube = async () => {
@@ -666,6 +681,7 @@ export function StoryContent() {
         },
         {
           onSuccess: () => {
+            resyncActiveStoryPlayback(story.id);
             setEditingItemId(null);
             setRegenerateStatusMessage('');
             toast({

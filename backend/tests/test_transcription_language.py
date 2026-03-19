@@ -4,8 +4,8 @@ from io import BytesIO
 import numpy as np
 from fastapi import UploadFile
 
-from backend import main
 from backend.backends.mlx_backend import MLXSTTBackend
+from backend.routes import runtime as runtime_routes
 
 
 class DummyWhisperModel:
@@ -42,10 +42,10 @@ def _make_upload_file() -> UploadFile:
 def test_transcribe_endpoint_omits_language_for_auto_detect(monkeypatch, tmp_path):
     dummy_model = DummyWhisperModel()
 
-    monkeypatch.setattr(main.transcribe, "get_whisper_model", lambda: dummy_model)
+    monkeypatch.setattr(runtime_routes.transcribe, "get_whisper_model", lambda: dummy_model)
     monkeypatch.setattr("backend.utils.audio.load_audio", lambda *_args, **_kwargs: (np.zeros(16000), 16000))
 
-    response = asyncio.run(main.transcribe_audio(file=_make_upload_file(), language=None))
+    response = asyncio.run(runtime_routes.transcribe_audio(file=_make_upload_file(), language=None))
 
     assert response.text == "stub transcript"
     assert response.duration == 1.0
@@ -56,10 +56,10 @@ def test_transcribe_endpoint_omits_language_for_auto_detect(monkeypatch, tmp_pat
 def test_transcribe_endpoint_forwards_explicit_language(monkeypatch, tmp_path):
     dummy_model = DummyWhisperModel()
 
-    monkeypatch.setattr(main.transcribe, "get_whisper_model", lambda: dummy_model)
+    monkeypatch.setattr(runtime_routes.transcribe, "get_whisper_model", lambda: dummy_model)
     monkeypatch.setattr("backend.utils.audio.load_audio", lambda *_args, **_kwargs: (np.zeros(8000), 16000))
 
-    response = asyncio.run(main.transcribe_audio(file=_make_upload_file(), language="ko"))
+    response = asyncio.run(runtime_routes.transcribe_audio(file=_make_upload_file(), language="ko"))
 
     assert response.text == "stub transcript"
     assert response.duration == 0.5
@@ -70,10 +70,10 @@ def test_transcribe_endpoint_forwards_explicit_language(monkeypatch, tmp_path):
 def test_transcribe_endpoint_forwards_explicit_model(monkeypatch):
     dummy_model = DummyWhisperModel()
 
-    monkeypatch.setattr(main.transcribe, "get_whisper_model", lambda: dummy_model)
+    monkeypatch.setattr(runtime_routes.transcribe, "get_whisper_model", lambda: dummy_model)
     monkeypatch.setattr("backend.utils.audio.load_audio", lambda *_args, **_kwargs: (np.zeros(32000), 16000))
 
-    response = asyncio.run(main.transcribe_audio(file=_make_upload_file(), language="en", model="turbo"))
+    response = asyncio.run(runtime_routes.transcribe_audio(file=_make_upload_file(), language="en", model="turbo"))
 
     assert response.text == "stub transcript"
     assert response.duration == 2.0

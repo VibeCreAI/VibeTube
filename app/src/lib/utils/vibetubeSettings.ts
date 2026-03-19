@@ -1,4 +1,5 @@
 import { useUIStore } from '@/stores/uiStore';
+import type { WhisperModelSize } from '@/lib/constants/tts';
 
 export interface VibeTubeRenderSettings {
   fps: number;
@@ -32,6 +33,20 @@ export interface VibeTubeRenderSettings {
   subtitle_italic: boolean;
   story_layout_style: 'balanced' | 'stage' | 'compact';
   show_profile_names: boolean;
+}
+
+const WHISPER_MODEL_KEY = 'vibetube.settings.whisperModel';
+
+export function getPreferredWhisperModel(): WhisperModelSize | null {
+  if (typeof window === 'undefined') return null;
+  const raw = window.localStorage.getItem(WHISPER_MODEL_KEY);
+  if (!raw) return null;
+  return raw as WhisperModelSize;
+}
+
+export function setPreferredWhisperModel(model: WhisperModelSize): void {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(WHISPER_MODEL_KEY, model);
 }
 
 export const VIBETUBE_SETTING_KEYS = {

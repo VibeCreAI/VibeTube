@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/use-toast';
 import { apiClient } from '@/lib/api/client';
 import type { StoryItemDetail } from '@/lib/api/types';
+import { getGenerationAudioLabel } from '@/lib/constants/tts';
 import {
   useDuplicateStoryItem,
   useMoveStoryItem,
@@ -214,9 +215,15 @@ export function StoryTrackEditor({ storyId, items }: StoryTrackEditorProps) {
     if (isCurrentlyPlaying) {
       pause();
     } else {
+      if (selectedClipId) {
+        const selectedItem = items.find((item) => item.id === selectedClipId);
+        if (selectedItem) {
+          seek(selectedItem.start_time_ms);
+        }
+      }
       play(storyId, sortedItems);
     }
-  }, [isCurrentlyPlaying, pause, play, storyId, sortedItems]);
+  }, [isCurrentlyPlaying, items, pause, play, seek, selectedClipId, storyId, sortedItems]);
 
   const handleStop = () => {
     stop();
@@ -999,6 +1006,11 @@ export function StoryTrackEditor({ storyId, items }: StoryTrackEditorProps) {
                   trim_end_ms: displayTrimEnd,
                 });
                 const clipWidth = msToPixels(effectiveDuration);
+                const generationLabel = getGenerationAudioLabel({
+                  engine: item.engine,
+                  modelSize: item.model_size,
+                  sourceType: item.source_type,
+                });
 
                 return (
                   <div
@@ -1012,6 +1024,7 @@ export function StoryTrackEditor({ storyId, items }: StoryTrackEditorProps) {
                   >
                     <button
                       type="button"
+                      title={`${item.profile_name} • ${generationLabel}`}
                       className={cn(
                         'w-full h-full rounded cursor-move overflow-hidden',
                         'bg-accent/80 hover:bg-accent border border-accent-foreground/20',
@@ -1032,6 +1045,11 @@ export function StoryTrackEditor({ storyId, items }: StoryTrackEditorProps) {
                         <p className="text-[9px] font-medium text-accent-foreground truncate">
                           {item.profile_name}
                         </p>
+                        {clipWidth >= 90 && (
+                          <p className="text-[8px] leading-none text-accent-foreground/80 truncate">
+                            {generationLabel}
+                          </p>
+                        )}
                       </div>
                       {/* Waveform */}
                       <div className="absolute inset-0 top-3">

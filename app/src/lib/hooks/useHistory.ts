@@ -23,8 +23,11 @@ export function useDeleteGeneration() {
 
   return useMutation({
     mutationFn: (generationId: string) => apiClient.deleteGeneration(generationId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['history'] });
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: ['history'],
+        refetchType: 'active',
+      });
     },
   });
 }
@@ -86,8 +89,11 @@ export function useImportGeneration() {
 
   return useMutation({
     mutationFn: (file: File) => apiClient.importGeneration(file),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['history'] });
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: ['history'],
+        refetchType: 'active',
+      });
     },
   });
 }
