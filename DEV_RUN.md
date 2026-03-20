@@ -5,7 +5,6 @@ Use two terminals: one for backend API, one for frontend web UI.
 ## 1) Backend API (Terminal A)
 
 ```powershell
-cd C:\Users\samso\OneDrive\Desktop\Vibe\Web\VibeTube
 .\.venv\Scripts\python.exe -m uvicorn backend.main:app --host 127.0.0.1 --port 17493 --reload
 ```
 
@@ -18,8 +17,8 @@ curl http://127.0.0.1:17493/health
 ## 2) Frontend Web Dev Server (Terminal B)
 
 ```powershell
-cd C:\Users\samso\OneDrive\Desktop\Vibe\Web\VibeTube
 bun run dev:web -- --host 127.0.0.1
+
 bun run dev
 ```
 
