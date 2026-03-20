@@ -4,11 +4,30 @@
 
 # VibeTube
 
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-0f766e" alt="License: MIT" /></a>
+  <img src="https://img.shields.io/badge/platforms-Windows-1d4ed8" alt="Platforms: Windows" />
+  <img src="https://img.shields.io/badge/runtime-local--first-111827" alt="Runtime: Local-first" />
+  <img src="https://img.shields.io/badge/desktop-Tauri-f97316" alt="Desktop: Tauri" />
+</p>
+
 Local-first voice cloning, character creation, story assembly, and talking-character rendering.
 
 > VibeTube started from a fork/vendor of [Voicebox](https://github.com/jamiepine/voicebox). Huge credit to the original project. This repo now evolves that foundation into VibeTube's own workflow and UI.
 
-VibeTube is a local-first app for building voice-driven character content with a React frontend and a FastAPI backend. In development it runs as a web app against a local server; in packaged use it runs as a Tauri desktop app with a bundled backend. The current product centers on Characters, Generate, Stories, and VibeTube rendering, with support for local runtime by default and configurable server connections where needed.
+VibeTube is a local-first app for building voice-driven character content with a React frontend and a FastAPI backend. In development it runs as a web app against a local server; in packaged use it runs as a Tauri desktop app with a bundled backend. The current product centers on Characters, Generate, Stories, Broadcast, and VibeTube rendering, with support for local runtime by default and configurable server connections where needed.
+
+<p align="center">
+  <img src=".github/assets/screenshot.webp" alt="VibeTube app screenshot" width="900" />
+</p>
+
+## Demo
+
+[![Watch the VibeTube demo on YouTube](https://img.youtube.com/vi/Oco9v5mhcpg/0.jpg)](https://youtu.be/Oco9v5mhcpg?si=VhFm2XoPrfx1EYQc)
+
+Watch the current app demo on YouTube: https://youtu.be/Oco9v5mhcpg?si=VhFm2XoPrfx1EYQc
+
+This walkthrough predates the current Broadcast feature. Broadcast is already available in the app, and a newer demo video will be added later.
 
 ## What VibeTube Includes
 
@@ -33,6 +52,13 @@ VibeTube is a local-first app for building voice-driven character content with a
 - Reuse generated clips inside story workflows
 - Keep story editing separate from one-off generations
 
+### Broadcast
+
+- Use your avatar as a PNGTuber in live sessions
+- Stream VibeTube output into OBS Studio
+- Drive avatar speaking states from your voice in real time
+- Use Broadcast as a live workflow separate from offline render exports
+
 ### VibeTube Rendering
 
 - Render talking-character output from avatar states
@@ -56,12 +82,12 @@ VibeTube is a local-first app for building voice-driven character content with a
 
 ## Download
 
-Public download links are not published yet. This section is intentionally left as a placeholder and will be updated once releases are ready.
+Windows installers are available from the latest GitHub release. macOS and Linux packaged downloads are not published yet.
 
 | Platform | Download |
 | --- | --- |
 | macOS | TBD |
-| Windows | TBD |
+| Windows | [Latest release](https://github.com/VibeCreAI/VibeTube/releases/latest) |
 | Linux | TBD |
 
 ## Development
@@ -70,9 +96,27 @@ For full setup and contribution details, see [CONTRIBUTING.md](CONTRIBUTING.md) 
 
 ### Quick local run
 
+Prerequisites:
+
+- [Bun](https://bun.sh)
+- [Python 3.11+](https://python.org)
+- [Rust](https://rustup.rs) for Tauri development only
+
 ```bash
 # Install JavaScript dependencies
 bun install
+
+# Create and activate a Python virtual environment
+python -m venv .venv
+
+# Windows PowerShell
+.\.venv\Scripts\Activate.ps1
+
+# macOS / Linux
+source .venv/bin/activate
+
+# Install backend dependencies
+pip install -r backend/requirements.txt
 
 # Start the backend on http://127.0.0.1:17493
 python -m uvicorn backend.main:app --host 127.0.0.1 --port 17493 --reload
@@ -129,3 +173,4 @@ Security reporting information is in [SECURITY.md](SECURITY.md).
 ## License
 
 VibeTube is released under the MIT License. See [LICENSE](LICENSE).
+For an informational responsibility notice that does not alter the MIT terms, see [DISCLAIMER.md](DISCLAIMER.md).

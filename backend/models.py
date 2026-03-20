@@ -253,19 +253,19 @@ class StoryVibeTubeRenderRequest(BaseModel):
     """Request model for rendering a full story with VibeTube avatars."""
 
     fps: int = Field(default=30, ge=1, le=120)
-    width: int = Field(default=512, ge=64, le=4096)
-    height: int = Field(default=512, ge=64, le=4096)
-    on_threshold: float = Field(default=0.024, ge=0.001, le=0.5)
-    off_threshold: float = Field(default=0.016, ge=0.001, le=0.5)
-    smoothing_windows: int = Field(default=3, ge=1, le=20)
+    width: int = Field(default=1080, ge=64, le=4096)
+    height: int = Field(default=1080, ge=64, le=4096)
+    on_threshold: float = Field(default=0.03, ge=0.001, le=0.5)
+    off_threshold: float = Field(default=0.025, ge=0.001, le=0.5)
+    smoothing_windows: int = Field(default=2, ge=1, le=20)
     min_hold_windows: int = Field(default=1, ge=1, le=20)
-    blink_min_interval_sec: float = Field(default=3.5, ge=0.2, le=60.0)
-    blink_max_interval_sec: float = Field(default=5.5, ge=0.2, le=60.0)
+    blink_min_interval_sec: float = Field(default=2.5, ge=0.2, le=60.0)
+    blink_max_interval_sec: float = Field(default=4.0, ge=0.2, le=60.0)
     blink_duration_frames: int = Field(default=3, ge=1, le=30)
-    head_motion_amount_px: float = Field(default=3.0, ge=0.0, le=100.0)
+    head_motion_amount_px: float = Field(default=10.0, ge=0.0, le=100.0)
     head_motion_change_sec: float = Field(default=2.8, ge=0.1, le=60.0)
     head_motion_smoothness: float = Field(default=0.04, ge=0.001, le=1.0)
-    voice_bounce_amount_px: float = Field(default=4.0, ge=0.0, le=100.0)
+    voice_bounce_amount_px: float = Field(default=2.0, ge=0.0, le=100.0)
     voice_bounce_sensitivity: float = Field(default=1.0, ge=0.05, le=8.0)
     use_background_color: bool = False
     use_background_image: bool = False

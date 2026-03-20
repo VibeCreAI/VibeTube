@@ -67,7 +67,8 @@ Security-related fixes may be reflected in:
 
 - patch releases
 - GitHub release notes
-- repository documentation such as [CHANGELOG.md](CHANGELOG.md)
+- GitHub Security Advisories when used
+- repository documentation updates
 
 ## Disclosure
 

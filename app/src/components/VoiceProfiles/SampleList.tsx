@@ -1,4 +1,4 @@
-import { Check, Edit, Pause, Play, Plus, Trash2, Volume2, X } from 'lucide-react';
+import { Check, Download, Edit, Pause, Play, Plus, Trash2, Volume2, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { CircleButton } from '@/components/ui/circle-button';
@@ -22,6 +22,7 @@ import {
 } from '@/lib/hooks/useProfiles';
 import { formatAudioDuration } from '@/lib/utils/audio';
 import { cn } from '@/lib/utils/cn';
+import { usePlatform } from '@/platform/PlatformContext';
 import { SampleUpload } from './SampleUpload';
 
 interface MiniSamplePlayerProps {
@@ -145,7 +146,18 @@ interface SampleListProps {
   profileId: string;
 }
 
+function buildSampleExportFilename(sampleIndex: number, referenceText: string): string {
+  const snippet = referenceText
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40);
+  const suffix = snippet ? `-${snippet}` : '';
+  return `voice-sample-${sampleIndex + 1}${suffix}.wav`;
+}
+
 export function SampleList({ profileId }: SampleListProps) {
+  const platform = usePlatform();
   const { data: samples, isLoading } = useProfileSamples(profileId);
   const deleteSample = useDeleteSample();
   const updateSample = useUpdateSample();
@@ -158,6 +170,7 @@ export function SampleList({ profileId }: SampleListProps) {
   const [audioCacheBust, setAudioCacheBust] = useState<Record<string, number>>({});
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [sampleToDelete, setSampleToDelete] = useState<string | null>(null);
+  const [exportingSampleId, setExportingSampleId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!samples) return;
@@ -244,6 +257,32 @@ export function SampleList({ profileId }: SampleListProps) {
     }
   };
 
+  const handleExportSample = async (sampleId: string, sampleIndex: number, referenceText: string) => {
+    setExportingSampleId(sampleId);
+    try {
+      const blob = await apiClient.exportProfileSampleAudio(sampleId);
+      const filename = buildSampleExportFilename(sampleIndex, referenceText);
+      await platform.filesystem.saveFile(filename, blob, [
+        {
+          name: 'Audio',
+          extensions: ['wav'],
+        },
+      ]);
+      toast({
+        title: 'Sample exported',
+        description: `Saved ${filename}.`,
+      });
+    } catch (error) {
+      toast({
+        title: 'Export failed',
+        description: error instanceof Error ? error.message : 'Failed to export sample audio.',
+        variant: 'destructive',
+      });
+    } finally {
+      setExportingSampleId((current) => (current === sampleId ? null : current));
+    }
+  };
+
   if (isLoading) {
     return <div className="text-sm text-muted-foreground">Loading samples...</div>;
   }
@@ -319,7 +358,15 @@ export function SampleList({ profileId }: SampleListProps) {
                       </div>
 
                       {/* Action Buttons */}
-                      <div className="shrink-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <div className="shrink-0 flex items-center gap-0.5 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100">
+                        <CircleButton
+                          icon={Download}
+                          title="Export sample audio"
+                          onClick={() =>
+                            handleExportSample(sample.id, index, sample.reference_text)
+                          }
+                          disabled={exportingSampleId === sample.id}
+                        />
                         <CircleButton
                           icon={Edit}
                           title="Edit transcription"

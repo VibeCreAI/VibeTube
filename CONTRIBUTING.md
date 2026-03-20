@@ -252,6 +252,8 @@ PR checklist:
 - [ ] Manually tested
 - [ ] Breaking changes called out clearly
 
+Maintainers handle release notes. Contributors do not need to update a `CHANGELOG.md` file.
+
 ## Releases
 
 Releases are managed by maintainers.
@@ -284,7 +286,6 @@ Only use the release flow if you are acting as a maintainer for an actual releas
 - [DEV_RUN.md](DEV_RUN.md)
 - [backend/README.md](backend/README.md)
 - [SECURITY.md](SECURITY.md)
-- [CHANGELOG.md](CHANGELOG.md)
 
 ## License
 

@@ -186,6 +186,15 @@ class ApiClient {
     });
   }
 
+  async exportProfileSampleAudio(sampleId: string): Promise<Blob> {
+    const url = this.getSampleUrl(sampleId);
+    const response = await fetch(url, { cache: 'no-store' });
+
+    await this.throwIfError(response);
+
+    return response.blob();
+  }
+
   async updateProfileSample(
     sampleId: string,
     referenceText: string,

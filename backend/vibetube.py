@@ -166,19 +166,19 @@ def render_story_overlay(
     avatar_dirs: dict[str, Path],
     output_dir: Path,
     fps: int = 30,
-    width: int = 512,
-    height: int = 512,
-    on_threshold: float = 0.024,
-    off_threshold: float = 0.016,
-    smoothing_windows: int = 3,
+    width: int = 1080,
+    height: int = 1080,
+    on_threshold: float = 0.03,
+    off_threshold: float = 0.025,
+    smoothing_windows: int = 2,
     min_hold_windows: int = 1,
-    blink_min_interval_sec: float = 3.5,
-    blink_max_interval_sec: float = 5.5,
+    blink_min_interval_sec: float = 2.5,
+    blink_max_interval_sec: float = 4.0,
     blink_duration_frames: int = 3,
-    head_motion_amount_px: float = 3.0,
+    head_motion_amount_px: float = 10.0,
     head_motion_change_sec: float = 2.8,
     head_motion_smoothness: float = 0.04,
-    voice_bounce_amount_px: float = 4.0,
+    voice_bounce_amount_px: float = 2.0,
     voice_bounce_sensitivity: float = 1.0,
     use_background: bool = False,
     background_color: Optional[str] = None,
@@ -420,19 +420,19 @@ def render_overlay(
     avatar_dir: Path,
     output_dir: Path,
     fps: int = 30,
-    width: int = 512,
-    height: int = 512,
+    width: int = 1080,
+    height: int = 1080,
     on_threshold: float = 0.03,
-    off_threshold: float = 0.02,
-    smoothing_windows: int = 3,
+    off_threshold: float = 0.025,
+    smoothing_windows: int = 2,
     min_hold_windows: int = 1,
-    blink_min_interval_sec: float = 3.5,
-    blink_max_interval_sec: float = 5.5,
+    blink_min_interval_sec: float = 2.5,
+    blink_max_interval_sec: float = 4.0,
     blink_duration_frames: int = 3,
-    head_motion_amount_px: float = 3.0,
+    head_motion_amount_px: float = 10.0,
     head_motion_change_sec: float = 2.8,
     head_motion_smoothness: float = 0.04,
-    voice_bounce_amount_px: float = 4.0,
+    voice_bounce_amount_px: float = 2.0,
     voice_bounce_sensitivity: float = 1.0,
     use_background: bool = False,
     background_color: Optional[str] = None,
@@ -479,7 +479,17 @@ def render_overlay(
     timeline_path = output_dir / "timeline.json"
     timeline_path.write_text(json.dumps(timeline, indent=2), encoding="utf-8")
 
-    assets = _load_avatar_assets(avatar_dir=avatar_dir, width=width, height=height)
+    single_avatar_slot = _single_avatar_slot(
+        width=width,
+        height=height,
+        reserve_bottom_ratio=0.16 if subtitle_enabled else (0.11 if show_profile_names else 0.06),
+    )
+    assets = _load_avatar_assets_to_canvas_slot(
+        avatar_dir=avatar_dir,
+        canvas_width=width,
+        canvas_height=height,
+        slot=single_avatar_slot,
+    )
     background_frames, background_durations_ms, background_total_ms = (
         _load_background_animation(background_image_path, width, height)
         if use_background
@@ -1023,6 +1033,66 @@ def _load_avatar_assets(avatar_dir: Path, width: int, height: int) -> dict[str, 
     }
 
 
+def _load_avatar_assets_to_canvas_slot(
+    avatar_dir: Path,
+    canvas_width: int,
+    canvas_height: int,
+    slot: dict[str, int],
+) -> dict[str, Optional[Image.Image]]:
+    return {
+        "idle": _load_image_to_canvas_slot(
+            avatar_dir / "idle.png",
+            canvas_width=canvas_width,
+            canvas_height=canvas_height,
+            slot_width=slot["width"],
+            slot_height=slot["height"],
+            slot_x=slot["x"],
+            slot_y=slot["y"],
+            required=True,
+        ),
+        "talk": _load_image_to_canvas_slot(
+            avatar_dir / "talk.png",
+            canvas_width=canvas_width,
+            canvas_height=canvas_height,
+            slot_width=slot["width"],
+            slot_height=slot["height"],
+            slot_x=slot["x"],
+            slot_y=slot["y"],
+            required=True,
+        ),
+        "idle_blink": _load_image_to_canvas_slot(
+            avatar_dir / "idle_blink.png",
+            canvas_width=canvas_width,
+            canvas_height=canvas_height,
+            slot_width=slot["width"],
+            slot_height=slot["height"],
+            slot_x=slot["x"],
+            slot_y=slot["y"],
+            required=False,
+        ),
+        "talk_blink": _load_image_to_canvas_slot(
+            avatar_dir / "talk_blink.png",
+            canvas_width=canvas_width,
+            canvas_height=canvas_height,
+            slot_width=slot["width"],
+            slot_height=slot["height"],
+            slot_x=slot["x"],
+            slot_y=slot["y"],
+            required=False,
+        ),
+        "blink": _load_image_to_canvas_slot(
+            avatar_dir / "blink.png",
+            canvas_width=canvas_width,
+            canvas_height=canvas_height,
+            slot_width=slot["width"],
+            slot_height=slot["height"],
+            slot_x=slot["x"],
+            slot_y=slot["y"],
+            required=False,
+        ),
+    }
+
+
 def _load_image(path: Path, width: int, height: int, required: bool) -> Optional[Image.Image]:
     if not path.exists():
         if required:
@@ -1035,6 +1105,24 @@ def _load_image(path: Path, width: int, height: int, required: bool) -> Optional
         cleaned = [(0, 0, 0, 0) if a == 0 else (r, g, b, a) for (r, g, b, a) in pixels]
         rgba.putdata(cleaned)
         return rgba.copy()
+
+
+def _load_image_to_canvas_slot(
+    path: Path,
+    canvas_width: int,
+    canvas_height: int,
+    slot_width: int,
+    slot_height: int,
+    slot_x: int,
+    slot_y: int,
+    required: bool,
+) -> Optional[Image.Image]:
+    slot_image = _load_image_to_slot(path, slot_width, slot_height, required=required)
+    if slot_image is None:
+        return None
+    canvas = Image.new("RGBA", (canvas_width, canvas_height), (0, 0, 0, 0))
+    canvas.alpha_composite(slot_image, (slot_x, slot_y))
+    return canvas
 
 
 def _export_webm(
@@ -1367,6 +1455,22 @@ def _layout_slots(
         safe_bottom=safe_bottom,
         height=height,
     )
+
+
+def _single_avatar_slot(
+    width: int,
+    height: int,
+    reserve_bottom_ratio: float = 0.06,
+) -> dict[str, int]:
+    safe_top = max(18, int(round(height * 0.05)))
+    safe_bottom = max(18, int(round(height * max(0.06, reserve_bottom_ratio))))
+    usable_height = max(1, height - safe_top - safe_bottom)
+    slot_size = max(1, int(round(min(width, height) * 0.74)))
+    slot_size = min(slot_size, width, usable_height)
+    x = max(0, (width - slot_size) // 2)
+    y = safe_top + max(0, (usable_height - slot_size) // 2)
+    y = max(0, min(height - slot_size, y))
+    return {"x": x, "y": y, "width": slot_size, "height": slot_size}
 
 
 def _layout_slots_from_template(

@@ -39,17 +39,21 @@ STATE_SUFFIXES = {
 }
 
 _SPRITESHEET_SYSTEM_PROMPT = (
-    "2x2 expression sprite sheet, same character in all 4 panels, "
-    "pixel art, transparent background, front-facing upper-body portrait, centered in each panel"
+    "2x2 expression sprite sheet, one character copied into all 4 panels, not 4 separate drawings, "
+    "pixel art, transparent background, front-facing upper-body portrait, identical pose, identical crop, "
+    "identical scale, identical camera, centered in each panel, slightly zoomed out, generous transparent margins, "
+    "shoulders fully inside frame, only eyes and mouth change"
 )
 _SPRITESHEET_LAYOUT = (
-    "top-left: neutral closed mouth open eyes, "
-    "top-right: open mouth open eyes, "
-    "bottom-left: closed eyes closed mouth, "
-    "bottom-right: closed eyes open mouth"
+    "top-left idle: eyes open mouth closed, "
+    "top-right talk: eyes open mouth open, "
+    "bottom-left idle blink: eyes closed mouth closed, "
+    "bottom-right talk blink: eyes closed mouth open"
 )
 _SPRITESHEET_NEGATIVE_EXTRA = (
-    "different characters, inconsistent character, background fill, misaligned panels, cut off character"
+    "different characters, redrawn panels, different pose, different crop, different zoom, "
+    "different scale, shifted character, panel drift, misaligned panels, inconsistent eye line, "
+    "cropped head, cropped shoulders, close-up crop, shoulder-to-shoulder crop, background fill"
 )
 
 
@@ -382,6 +386,119 @@ def _postprocess_and_save(
     if output_size != pixel_size:
         result = result.resize((output_size, output_size), Image.Resampling.NEAREST)
     result.save(out_path, format="PNG", optimize=True)
+
+
+def _get_content_bounds(
+    image: Image.Image, alpha_threshold: int = 10
+) -> Optional[tuple[int, int, int, int]]:
+    alpha = image.convert("RGBA").getchannel("A").point(lambda a: 255 if a > alpha_threshold else 0)
+    return alpha.getbbox()
+
+
+def _get_centering_offset(bounds: tuple[int, int, int, int], size: int) -> tuple[int, int]:
+    min_x, min_y, max_x, max_y = bounds
+    content_w = max_x - min_x
+    content_h = max_y - min_y
+    return (
+        int(round((size - content_w) / 2.0)) - min_x,
+        int(round((size - content_h) / 2.0)) - min_y,
+    )
+
+
+def _build_opaque_mask(image: Image.Image, mask_size: int) -> list[int]:
+    alpha = image.convert("RGBA").getchannel("A")
+    if alpha.size != (mask_size, mask_size):
+        alpha = alpha.resize((mask_size, mask_size), Image.Resampling.NEAREST)
+    return [1 if value > 10 else 0 for value in alpha.getdata()]
+
+
+def _mask_bounds(mask: list[int], size: int) -> Optional[tuple[int, int, int, int]]:
+    min_x = size
+    min_y = size
+    max_x = -1
+    max_y = -1
+    for y in range(size):
+        for x in range(size):
+            if mask[y * size + x] == 0:
+                continue
+            min_x = min(min_x, x)
+            min_y = min(min_y, y)
+            max_x = max(max_x, x)
+            max_y = max(max_y, y)
+    if max_x == -1:
+        return None
+    return min_x, min_y, max_x, max_y
+
+
+def _score_mask_alignment(
+    reference_mask: list[int],
+    candidate_mask: list[int],
+    size: int,
+    dx: int,
+    dy: int,
+) -> int:
+    overlap = 0
+    mismatch = 0
+    for y in range(size):
+        cy = y - dy
+        ref_row = y * size
+        candidate_inside_y = 0 <= cy < size
+        candidate_row = cy * size
+        for x in range(size):
+            ref_opaque = reference_mask[ref_row + x] == 1
+            candidate_opaque = False
+            if candidate_inside_y:
+                cx = x - dx
+                if 0 <= cx < size:
+                    candidate_opaque = candidate_mask[candidate_row + cx] == 1
+            if ref_opaque and candidate_opaque:
+                overlap += 1
+            elif ref_opaque != candidate_opaque:
+                mismatch += 1
+    return overlap * 4 - mismatch
+
+
+def _find_shared_alignment_offset(
+    reference_image: Image.Image,
+    candidate_image: Image.Image,
+) -> tuple[int, int]:
+    mask_size = 96
+    search_radius = 8
+    reference_mask = _build_opaque_mask(reference_image, mask_size)
+    candidate_mask = _build_opaque_mask(candidate_image, mask_size)
+    reference_bounds = _mask_bounds(reference_mask, mask_size)
+    candidate_bounds = _mask_bounds(candidate_mask, mask_size)
+
+    base_dx = 0
+    base_dy = 0
+    if reference_bounds is not None and candidate_bounds is not None:
+        ref_center_x = (reference_bounds[0] + reference_bounds[2]) / 2.0
+        ref_center_y = (reference_bounds[1] + reference_bounds[3]) / 2.0
+        cand_center_x = (candidate_bounds[0] + candidate_bounds[2]) / 2.0
+        cand_center_y = (candidate_bounds[1] + candidate_bounds[3]) / 2.0
+        base_dx = int(round(ref_center_x - cand_center_x))
+        base_dy = int(round(ref_center_y - cand_center_y))
+
+    best_dx = base_dx
+    best_dy = base_dy
+    best_score = -10**18
+    for dy in range(base_dy - search_radius, base_dy + search_radius + 1):
+        for dx in range(base_dx - search_radius, base_dx + search_radius + 1):
+            score = _score_mask_alignment(reference_mask, candidate_mask, mask_size, dx, dy)
+            if score > best_score:
+                best_score = score
+                best_dx = dx
+                best_dy = dy
+
+    scale = reference_image.width / float(mask_size)
+    return int(round(best_dx * scale)), int(round(best_dy * scale))
+
+
+def _reposition_quadrant(image: Image.Image, offset_x: int, offset_y: int) -> Image.Image:
+    rgba = image.convert("RGBA")
+    result = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    result.paste(rgba, (offset_x, offset_y), rgba)
+    return result
 
 
 def _limit_words(text: str, max_words: int) -> str:
@@ -1016,10 +1133,29 @@ def generate_avatar_spritesheet(
             "talk_blink": (half, half, size, size),
         }
 
+        raw_quadrants = {state: sheet_img.crop(box).convert("RGBA") for state, box in quadrants.items()}
+        reference_quadrant = raw_quadrants["idle"]
+        reference_bounds = _get_content_bounds(reference_quadrant)
+        reference_offset = (
+            _get_centering_offset(reference_bounds, half) if reference_bounds is not None else (0, 0)
+        )
+
+        normalized_quadrants: dict[str, Image.Image] = {}
+        for state, quadrant in raw_quadrants.items():
+            alignment_offset = (
+                (0, 0)
+                if state == "idle"
+                else _find_shared_alignment_offset(reference_quadrant, quadrant)
+            )
+            normalized_quadrants[state] = _reposition_quadrant(
+                quadrant,
+                reference_offset[0] + alignment_offset[0],
+                reference_offset[1] + alignment_offset[1],
+            )
+
         out_dir.mkdir(parents=True, exist_ok=True)
         saved = 0
-        for state, box in quadrants.items():
-            quadrant = sheet_img.crop(box)
+        for state, quadrant in normalized_quadrants.items():
             _postprocess_and_save(
                 quadrant,
                 out_dir / f"{state}.png",

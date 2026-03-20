@@ -165,23 +165,49 @@ const AVATAR_STATE_DEFS: Array<{
 
 type AvatarUploadMode = 'individual' | 'spritesheet';
 
-const SPRITE_SHEET_PROMPT_GUIDE = `Character expression sheet — 1024x1024 PNG sprite sheet with 4 equal 512x512 quadrants, transparent background (alpha channel).
+const SPRITE_SHEET_PROMPT_GUIDE = `Character expression sheet, 1024x1024 PNG sprite sheet, transparent background, 4 equal 512x512 quadrants.
 
-This is a 4-panel expression reference sheet for a single character. Think of it as one base drawing with only the eyes and mouth digitally edited between panels. Every other element — head position, head angle, hair, body, arms, clothing, lighting, shading, line weight — must be absolutely identical across all 4 quadrants. The character's eyes must be anchored at the exact same pixel coordinates in every quadrant.
+Generate ONE master character portrait and copy that same portrait into all 4 quadrants. Do NOT redraw the character 4 separate times. After copying the same portrait into all 4 panels, change ONLY the eyelids and mouth shape per panel. Everything else must remain locked in exactly the same place.
 
-Top-left (Idle): Eyes fully open, mouth closed, neutral expression.
-Top-right (Talk): Eyes fully open, mouth open in a natural mid-speech position.
-Bottom-left (Idle Blink): Eyes fully closed (mid-blink), mouth closed.
-Bottom-right (Talk Blink): Eyes fully closed (mid-blink), mouth open.
+Expression layout:
+Top-left (Idle): eyes open, mouth closed.
+Top-right (Talk): eyes open, mouth open.
+Bottom-left (Idle Blink): eyes closed, mouth closed.
+Bottom-right (Talk Blink): eyes closed, mouth open.
 
 Hard requirements:
-- Canvas: exactly 1024x1024 px, 4 quadrants of exactly 512x512 each, zero padding or gutters between quadrants. Do NOT draw any dividing lines, borders, grid lines, separators, or frames between or around the quadrants — the quadrant boundaries must be completely invisible.
-- Treat each quadrant as a fully independent 512x512 image. The character must be perfectly centered within each 512x512 quadrant — equal empty space on the left and right sides, equal empty space on the top and bottom. The character's horizontal midpoint must align with x=256 of its quadrant and the vertical midpoint must align with y=256 of its quadrant.
-- The character's bounding box (top, bottom, left, right extents) must be identical in every quadrant — same width, same height, same margins on all sides. Do not scale, shrink, grow, or nudge the character between quadrants.
-- ONLY the eyes and mouth shape change between quadrants. Head tilt, hair, body pose, clothing, shadows, character size — all must be pixel-identical.
-- Transparent background in all 4 quadrants (no fill, no gradient, no vignette).
-- Art style: [describe your desired style, e.g. anime, flat vector, pixel art, semi-realistic]
-- Character: [describe your character here]`;
+- Canvas must be exactly 1024x1024 px, arranged as a 2x2 grid of four 512x512 panels, with no borders, dividers, gutters, frames, or visible quadrant lines.
+- The character must have the exact same pose, camera angle, crop, zoom, proportions, head size, shoulder width, torso size, and silhouette in all 4 quadrants.
+- Use a slightly zoomed-out composition. The character should be smaller than a close-up portrait and must not fill the whole quadrant from shoulder to shoulder.
+- Aim for generous transparent margins on every side. The character should occupy roughly 60-70% of the quadrant width and about 70-78% of the quadrant height.
+- Keep the full head, hair, neck, and both shoulders comfortably inside the panel. Shoulders must not touch the left or right edge of the quadrant.
+- The character must stay perfectly centered in every 512x512 panel. Keep identical left/right margins and identical top/bottom margins in all quadrants.
+- Keep the eye line, chin, shoulders, and overall body position on the exact same coordinates in every quadrant.
+- The character should occupy the same amount of space in every panel, with consistent transparent margins around the figure. Do not zoom in, zoom out, shrink, enlarge, or nudge the character between panels.
+- ONLY the eyelids and mouth are allowed to change. Do not move the head, hair, neck, body, arms, clothes, lighting, shadows, or linework.
+- Mouth-open panels must open the mouth inside the same face position. Do not move the jaw, lower the head, or change the crop to create the talking expression.
+- Blink panels must close the eyes in place. Do not tilt the head, change the brows, or shift the face.
+- Transparent background in all 4 quadrants. No background color, gradient, glow, vignette, props, scenery, text, watermark, or shadow outside the character.
+
+Prompt template:
+Art style: [describe style]
+Character: [describe character]
+Framing: front-facing upper-body portrait, centered, same crop in all 4 panels
+Size rule: slightly zoomed out, generous transparent margins, no shoulder-to-shoulder crop
+Critical rule: one master drawing copied four times, only eyes and mouth edited between panels`;
+
+const SPRITE_SHEET_STYLE_PLACEHOLDER = '[describe style]';
+const SPRITE_SHEET_CHARACTER_PLACEHOLDER = '[describe character]';
+
+function buildSpriteSheetPrompt(style: string, character: string): string {
+  const resolvedStyle = style.trim() || SPRITE_SHEET_STYLE_PLACEHOLDER;
+  const resolvedCharacter = character.trim() || SPRITE_SHEET_CHARACTER_PLACEHOLDER;
+
+  return SPRITE_SHEET_PROMPT_GUIDE.replace(
+    `Art style: ${SPRITE_SHEET_STYLE_PLACEHOLDER}`,
+    `Art style: ${resolvedStyle}`,
+  ).replace(`Character: ${SPRITE_SHEET_CHARACTER_PLACEHOLDER}`, `Character: ${resolvedCharacter}`);
+}
 
 function getContentBounds(
   imageData: ImageData,
@@ -204,6 +230,139 @@ function getContentBounds(
   return maxX === -1 ? null : { minX, minY, maxX, maxY };
 }
 
+function getCenteringOffset(
+  bounds: { minX: number; minY: number; maxX: number; maxY: number },
+  size: number,
+): { x: number; y: number } {
+  const contentW = bounds.maxX - bounds.minX + 1;
+  const contentH = bounds.maxY - bounds.minY + 1;
+  return {
+    x: Math.round((size - contentW) / 2) - bounds.minX,
+    y: Math.round((size - contentH) / 2) - bounds.minY,
+  };
+}
+
+function getOpaqueMask(canvas: HTMLCanvasElement, maskSize: number): Uint8Array {
+  const maskCanvas = document.createElement('canvas');
+  maskCanvas.width = maskSize;
+  maskCanvas.height = maskSize;
+  const maskCtx = maskCanvas.getContext('2d');
+  if (!maskCtx) {
+    throw new Error('Canvas 2D context unavailable.');
+  }
+  maskCtx.imageSmoothingEnabled = false;
+  maskCtx.clearRect(0, 0, maskSize, maskSize);
+  maskCtx.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, maskSize, maskSize);
+  const data = maskCtx.getImageData(0, 0, maskSize, maskSize).data;
+  const mask = new Uint8Array(maskSize * maskSize);
+  for (let i = 0; i < mask.length; i++) {
+    mask[i] = data[i * 4 + 3] > 10 ? 1 : 0;
+  }
+  return mask;
+}
+
+function getMaskBounds(
+  mask: Uint8Array,
+  size: number,
+): { minX: number; minY: number; maxX: number; maxY: number } | null {
+  let minX = size;
+  let minY = size;
+  let maxX = -1;
+  let maxY = -1;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      if (mask[y * size + x] === 0) {
+        continue;
+      }
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+  }
+  return maxX === -1 ? null : { minX, minY, maxX, maxY };
+}
+
+function scoreMaskAlignment(
+  referenceMask: Uint8Array,
+  candidateMask: Uint8Array,
+  size: number,
+  dx: number,
+  dy: number,
+): number {
+  let overlap = 0;
+  let mismatch = 0;
+
+  for (let y = 0; y < size; y++) {
+    const cy = y - dy;
+    const refRow = y * size;
+    const candidateInsideY = cy >= 0 && cy < size;
+    const candidateRow = cy * size;
+
+    for (let x = 0; x < size; x++) {
+      const refOpaque = referenceMask[refRow + x] === 1;
+      let candidateOpaque = false;
+      if (candidateInsideY) {
+        const cx = x - dx;
+        if (cx >= 0 && cx < size) {
+          candidateOpaque = candidateMask[candidateRow + cx] === 1;
+        }
+      }
+
+      if (refOpaque && candidateOpaque) {
+        overlap += 1;
+      } else if (refOpaque !== candidateOpaque) {
+        mismatch += 1;
+      }
+    }
+  }
+
+  return overlap * 4 - mismatch;
+}
+
+function findSharedAlignmentOffset(
+  referenceCanvas: HTMLCanvasElement,
+  candidateCanvas: HTMLCanvasElement,
+): { x: number; y: number } {
+  const MASK_SIZE = 128;
+  const SEARCH_RADIUS = 12;
+  const referenceMask = getOpaqueMask(referenceCanvas, MASK_SIZE);
+  const candidateMask = getOpaqueMask(candidateCanvas, MASK_SIZE);
+  const referenceBounds = getMaskBounds(referenceMask, MASK_SIZE);
+  const candidateBounds = getMaskBounds(candidateMask, MASK_SIZE);
+
+  let baseDx = 0;
+  let baseDy = 0;
+  if (referenceBounds && candidateBounds) {
+    const referenceCenterX = (referenceBounds.minX + referenceBounds.maxX) / 2;
+    const referenceCenterY = (referenceBounds.minY + referenceBounds.maxY) / 2;
+    const candidateCenterX = (candidateBounds.minX + candidateBounds.maxX) / 2;
+    const candidateCenterY = (candidateBounds.minY + candidateBounds.maxY) / 2;
+    baseDx = Math.round(referenceCenterX - candidateCenterX);
+    baseDy = Math.round(referenceCenterY - candidateCenterY);
+  }
+
+  let bestDx = baseDx;
+  let bestDy = baseDy;
+  let bestScore = Number.NEGATIVE_INFINITY;
+
+  for (let dy = baseDy - SEARCH_RADIUS; dy <= baseDy + SEARCH_RADIUS; dy++) {
+    for (let dx = baseDx - SEARCH_RADIUS; dx <= baseDx + SEARCH_RADIUS; dx++) {
+      const score = scoreMaskAlignment(referenceMask, candidateMask, MASK_SIZE, dx, dy);
+      if (score > bestScore) {
+        bestScore = score;
+        bestDx = dx;
+        bestDy = dy;
+      }
+    }
+  }
+
+  const scale = referenceCanvas.width / MASK_SIZE;
+  return {
+    x: Math.round(bestDx * scale),
+    y: Math.round(bestDy * scale),
+  };
+}
 
 async function splitSpriteSheet(file: File): Promise<Record<AvatarStateKey, File>> {
   return new Promise((resolve, reject) => {
@@ -235,30 +394,62 @@ async function splitSpriteSheet(file: File): Promise<Record<AvatarStateKey, File
         reject(new Error('Canvas 2D context unavailable.'));
         return;
       }
+
+      const rawQuadrants = new Map<AvatarStateKey, HTMLCanvasElement>();
+      const rawBounds = new Map<
+        AvatarStateKey,
+        { minX: number; minY: number; maxX: number; maxY: number } | null
+      >();
+      for (const { key, sx, sy } of quadrants) {
+        const rawCanvas = document.createElement('canvas');
+        rawCanvas.width = HALF;
+        rawCanvas.height = HALF;
+        const rawCtx = rawCanvas.getContext('2d');
+        if (!rawCtx) {
+          reject(new Error('Canvas 2D context unavailable.'));
+          return;
+        }
+        rawCtx.clearRect(0, 0, HALF, HALF);
+        rawCtx.drawImage(img, sx, sy, HALF, HALF, 0, 0, HALF, HALF);
+        rawQuadrants.set(key, rawCanvas);
+        rawBounds.set(key, getContentBounds(rawCtx.getImageData(0, 0, HALF, HALF)));
+      }
+
+      const referenceCanvas = rawQuadrants.get('idle');
+      const referenceBounds = rawBounds.get('idle');
+      if (!referenceCanvas) {
+        reject(new Error('Idle quadrant is missing from the sprite sheet.'));
+        return;
+      }
+      const idleReferenceCanvas = referenceCanvas;
+      const referenceOffset = referenceBounds
+        ? getCenteringOffset(referenceBounds, HALF)
+        : { x: 0, y: 0 };
+
       const result = {} as Record<AvatarStateKey, File>;
       function processNext(i: number) {
         if (i >= quadrants.length) {
           resolve(result);
           return;
         }
-        const { key, sx, sy } = quadrants[i];
-
-        // Draw raw quadrant first to find the content bounding box.
-        ctx!.clearRect(0, 0, HALF, HALF);
-        ctx!.drawImage(img, sx, sy, HALF, HALF, 0, 0, HALF, HALF);
-        const bounds = getContentBounds(ctx!.getImageData(0, 0, HALF, HALF));
-
-        // Redraw with centering offset so the character is centred in the frame.
-        ctx!.clearRect(0, 0, HALF, HALF);
-        if (bounds) {
-          const contentW = bounds.maxX - bounds.minX + 1;
-          const contentH = bounds.maxY - bounds.minY + 1;
-          const offsetX = Math.round((HALF - contentW) / 2) - bounds.minX;
-          const offsetY = Math.round((HALF - contentH) / 2) - bounds.minY;
-          ctx!.drawImage(img, sx, sy, HALF, HALF, offsetX, offsetY, HALF, HALF);
-        } else {
-          ctx!.drawImage(img, sx, sy, HALF, HALF, 0, 0, HALF, HALF);
+        const { key } = quadrants[i];
+        const rawCanvas = rawQuadrants.get(key);
+        if (!rawCanvas) {
+          reject(new Error(`Missing quadrant data for ${key}.`));
+          return;
         }
+
+        const alignmentOffset =
+          key === 'idle'
+            ? { x: 0, y: 0 }
+            : findSharedAlignmentOffset(idleReferenceCanvas, rawCanvas);
+
+        ctx!.clearRect(0, 0, HALF, HALF);
+        ctx!.drawImage(
+          rawCanvas,
+          referenceOffset.x + alignmentOffset.x,
+          referenceOffset.y + alignmentOffset.y,
+        );
 
         canvas.toBlob((blob) => {
           if (!blob) {
@@ -355,6 +546,8 @@ export function ProfileForm() {
   const [avatarUploadMode, setAvatarUploadMode] = useState<AvatarUploadMode>('spritesheet');
   const [spriteSheetPreview, setSpriteSheetPreview] = useState<string | null>(null);
   const [isSplittingSpriteSheet, setIsSplittingSpriteSheet] = useState(false);
+  const [spriteSheetPromptStyle, setSpriteSheetPromptStyle] = useState('');
+  const [spriteSheetPromptCharacter, setSpriteSheetPromptCharacter] = useState('');
   const [avatarGeneratePrompt, setAvatarGeneratePrompt] = useState('');
   const [avatarGenerateSeed, setAvatarGenerateSeed] = useState<string>('');
   const [avatarModelId, setAvatarModelId] = useState<string>(AVATAR_TEST_MODEL_ID);
@@ -399,6 +592,10 @@ export function ProfileForm() {
     sampleMode !== 'record' || recordingPromptMode !== 'script';
   const shouldShowTranscriptionControls =
     sampleMode !== 'record' || recordingPromptMode === 'custom';
+  const filledSpriteSheetPrompt = buildSpriteSheetPrompt(
+    spriteSheetPromptStyle,
+    spriteSheetPromptCharacter,
+  );
 
   // Validate audio duration when file is selected
   useEffect(() => {
@@ -568,7 +765,9 @@ export function ProfileForm() {
     setSelectedAvatarPresetId(null);
     try {
       const splitFiles = await splitSpriteSheet(file);
-      Object.entries(splitFiles).forEach(([k, f]) => setAvatarStateFile(k as AvatarStateKey, f));
+      Object.entries(splitFiles).forEach(([k, f]) => {
+        setAvatarStateFile(k as AvatarStateKey, f);
+      });
       form.setValue('avatarFile', splitFiles.idle, { shouldValidate: true });
       toast({ title: 'Sprite sheet split', description: 'All 4 states extracted successfully.' });
     } catch (err) {
@@ -715,6 +914,8 @@ export function ProfileForm() {
       setRecordingPromptMode('script');
       setRecordGainDb(0);
       setAvatarPreview(null);
+      setSpriteSheetPromptStyle('');
+      setSpriteSheetPromptCharacter('');
       setAvatarGeneratePrompt('');
       setAvatarGenerateSeed('');
       setAvatarModelId(AVATAR_TEST_MODEL_ID);
@@ -2212,20 +2413,39 @@ export function ProfileForm() {
                         <div className="rounded-md border bg-background/60 p-3 space-y-2">
                           <p className="text-xs font-medium">AI Prompt Guide</p>
                           <p className="text-[11px] text-muted-foreground">
-                            Paste this into any AI image generation service. Replace the Art style
-                            and Character placeholders with your own description before generating.
+                            Enter a style and character description, then copy the filled prompt
+                            for any AI image generation service.
                           </p>
+                          <div className="grid gap-2 md:grid-cols-2">
+                            <div className="space-y-1">
+                              <p className="text-[11px] font-medium">Style</p>
+                              <Input
+                                value={spriteSheetPromptStyle}
+                                onChange={(e) => setSpriteSheetPromptStyle(e.target.value)}
+                                placeholder="anime, pixel art, flat vector, semi-realistic..."
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <p className="text-[11px] font-medium">Character</p>
+                              <Textarea
+                                value={spriteSheetPromptCharacter}
+                                onChange={(e) => setSpriteSheetPromptCharacter(e.target.value)}
+                                placeholder="short silver hair, black hoodie, friendly expression..."
+                                className="min-h-[76px] text-[11px]"
+                              />
+                            </div>
+                          </div>
                           <Textarea
                             readOnly
-                            className="min-h-[120px] text-[11px] font-mono resize-none"
-                            value={SPRITE_SHEET_PROMPT_GUIDE}
+                            className="min-h-[160px] text-[11px] font-mono resize-none"
+                            value={filledSpriteSheetPrompt}
                           />
                           <Button
                             type="button"
                             variant="outline"
                             size="sm"
                             onClick={() => {
-                              navigator.clipboard.writeText(SPRITE_SHEET_PROMPT_GUIDE);
+                              navigator.clipboard.writeText(filledSpriteSheetPrompt);
                               toast({ title: 'Copied to clipboard' });
                             }}
                           >
