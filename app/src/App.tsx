@@ -1,10 +1,20 @@
 ﻿import { RouterProvider } from '@tanstack/react-router';
+import { Download, RefreshCw } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import vibetubeLogo from '@/assets/vibetube-logo.png';
 import { BroadcastOutputShell } from '@/components/BroadcastTab/BroadcastOutputShell';
 import ShinyText from '@/components/ShinyText';
 import { TitleBarDragRegion } from '@/components/TitleBarDragRegion';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Progress } from '@/components/ui/progress';
 import { useAutoUpdater } from '@/hooks/useAutoUpdater';
 import { TOP_SAFE_AREA_PADDING } from '@/lib/constants/ui';
 import { cn } from '@/lib/utils/cn';
@@ -43,10 +53,76 @@ function App() {
   const [serverReady, setServerReady] = useState(false);
   const [loadingMessageIndex, setLoadingMessageIndex] = useState(0);
   const [serverError, setServerError] = useState<string | null>(null);
+  const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
+  const [dismissedUpdateVersion, setDismissedUpdateVersion] = useState<string | null>(null);
   const serverStartingRef = useRef(false);
 
-  // Automatically check for app updates on startup and show toast notifications
-  useAutoUpdater({ checkOnMount: true, showToast: true });
+  // Automatically check for app updates on startup
+  const {
+    status: updateStatus,
+    downloadAndInstall,
+    restartAndInstall,
+  } = useAutoUpdater({ checkOnMount: true });
+
+  useEffect(() => {
+    if (!platform.metadata.isTauri || isBroadcastOutput) {
+      return;
+    }
+
+    if (updateStatus.downloading || updateStatus.readyToInstall) {
+      setUpdateDialogOpen(true);
+      return;
+    }
+
+    if (
+      updateStatus.available &&
+      updateStatus.version &&
+      dismissedUpdateVersion !== updateStatus.version
+    ) {
+      setUpdateDialogOpen(true);
+    }
+  }, [
+    dismissedUpdateVersion,
+    isBroadcastOutput,
+    platform.metadata.isTauri,
+    updateStatus.available,
+    updateStatus.downloading,
+    updateStatus.readyToInstall,
+    updateStatus.version,
+  ]);
+
+  const handleUpdateDialogOpenChange = (open: boolean) => {
+    if (
+      !open &&
+      updateStatus.available &&
+      !updateStatus.downloading &&
+      !updateStatus.readyToInstall &&
+      updateStatus.version
+    ) {
+      setDismissedUpdateVersion(updateStatus.version);
+    }
+    setUpdateDialogOpen(open);
+  };
+
+  const handleDismissUpdateDialog = () => {
+    if (
+      updateStatus.available &&
+      !updateStatus.downloading &&
+      !updateStatus.readyToInstall &&
+      updateStatus.version
+    ) {
+      setDismissedUpdateVersion(updateStatus.version);
+    }
+    setUpdateDialogOpen(false);
+  };
+
+  const handleDownloadUpdate = () => {
+    void downloadAndInstall();
+  };
+
+  const handleRestartAndInstall = () => {
+    void restartAndInstall();
+  };
 
   // Sync stored setting to Rust on startup
   useEffect(() => {
@@ -221,7 +297,86 @@ function App() {
     return <BroadcastOutputShell />;
   }
 
-  return <RouterProvider router={router} />;
+  const isDownloadAvailable =
+    updateStatus.available && !updateStatus.downloading && !updateStatus.readyToInstall;
+  const progressPercent = updateStatus.downloadProgress ?? 0;
+  const progressText =
+    updateStatus.downloadedBytes !== undefined &&
+    updateStatus.totalBytes !== undefined &&
+    updateStatus.totalBytes > 0
+      ? `${(updateStatus.downloadedBytes / 1024 / 1024).toFixed(1)} MB / ${(updateStatus.totalBytes / 1024 / 1024).toFixed(1)} MB`
+      : null;
+
+  return (
+    <>
+      <RouterProvider router={router} />
+      <Dialog open={updateDialogOpen} onOpenChange={handleUpdateDialogOpenChange}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {updateStatus.readyToInstall
+                ? 'Update Ready to Install'
+                : updateStatus.downloading
+                  ? 'Downloading Update'
+                  : 'Update Available'}
+            </DialogTitle>
+            <DialogDescription>
+              {updateStatus.readyToInstall
+                ? `Version ${updateStatus.version} has been downloaded. Restart the app to finish installing.`
+                : updateStatus.downloading
+                  ? `Downloading version ${updateStatus.version}...`
+                  : `Version ${updateStatus.version} is available.`}
+            </DialogDescription>
+          </DialogHeader>
+
+          {updateStatus.downloading ? (
+            <div className="space-y-2">
+              <Progress value={progressPercent} />
+              {progressText ? (
+                <p className="text-xs text-muted-foreground">{progressText}</p>
+              ) : null}
+            </div>
+          ) : null}
+
+          {updateStatus.error ? (
+            <p className="text-sm text-destructive">{updateStatus.error}</p>
+          ) : null}
+
+          {isDownloadAvailable ? (
+            <DialogFooter>
+              <Button variant="outline" onClick={handleDismissUpdateDialog}>
+                Later
+              </Button>
+              <Button onClick={handleDownloadUpdate}>
+                <Download className="mr-2 h-4 w-4" />
+                Download Update
+              </Button>
+            </DialogFooter>
+          ) : null}
+
+          {updateStatus.downloading ? (
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setUpdateDialogOpen(false)}>
+                Hide
+              </Button>
+            </DialogFooter>
+          ) : null}
+
+          {updateStatus.readyToInstall ? (
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setUpdateDialogOpen(false)}>
+                Later
+              </Button>
+              <Button onClick={handleRestartAndInstall}>
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Restart & Install
+              </Button>
+            </DialogFooter>
+          ) : null}
+        </DialogContent>
+      </Dialog>
+    </>
+  );
 }
 
 export default App;

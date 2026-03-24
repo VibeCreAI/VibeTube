@@ -1,5 +1,5 @@
+import { getCurrentWindow, type ResizeDirection } from '@tauri-apps/api/window';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import { BroadcastStage } from '@/components/BroadcastTab/BroadcastStage';
 import {
   BROADCAST_CHANNEL_NAME,
@@ -8,6 +8,64 @@ import {
   createIdleBroadcastStageState,
   readBroadcastSnapshot,
 } from '@/lib/utils/broadcastSession';
+
+interface ResizeHandleConfig {
+  direction: ResizeDirection;
+  className: string;
+  cursorClassName: string;
+  ariaLabel: string;
+}
+
+const RESIZE_HANDLES: ResizeHandleConfig[] = [
+  {
+    direction: 'North',
+    className: 'left-3 right-3 top-0 h-3',
+    cursorClassName: 'cursor-n-resize',
+    ariaLabel: 'Resize from top edge',
+  },
+  {
+    direction: 'South',
+    className: 'bottom-0 left-3 right-3 h-3',
+    cursorClassName: 'cursor-s-resize',
+    ariaLabel: 'Resize from bottom edge',
+  },
+  {
+    direction: 'West',
+    className: 'bottom-3 left-0 top-3 w-3',
+    cursorClassName: 'cursor-w-resize',
+    ariaLabel: 'Resize from left edge',
+  },
+  {
+    direction: 'East',
+    className: 'bottom-3 right-0 top-3 w-3',
+    cursorClassName: 'cursor-e-resize',
+    ariaLabel: 'Resize from right edge',
+  },
+  {
+    direction: 'NorthWest',
+    className: 'left-0 top-0 h-4 w-4',
+    cursorClassName: 'cursor-nw-resize',
+    ariaLabel: 'Resize from top-left corner',
+  },
+  {
+    direction: 'NorthEast',
+    className: 'right-0 top-0 h-4 w-4',
+    cursorClassName: 'cursor-ne-resize',
+    ariaLabel: 'Resize from top-right corner',
+  },
+  {
+    direction: 'SouthWest',
+    className: 'bottom-0 left-0 h-4 w-4',
+    cursorClassName: 'cursor-sw-resize',
+    ariaLabel: 'Resize from bottom-left corner',
+  },
+  {
+    direction: 'SouthEast',
+    className: 'bottom-0 right-0 h-4 w-4',
+    cursorClassName: 'cursor-se-resize',
+    ariaLabel: 'Resize from bottom-right corner',
+  },
+];
 
 export function BroadcastOutputShell() {
   const [stageState, setStageState] = useState<BroadcastStageState>(() => {
@@ -52,18 +110,18 @@ export function BroadcastOutputShell() {
         return;
       }
 
+      setIsHighlighted(false);
+      if (highlightTimerRef.current !== null) {
+        window.clearTimeout(highlightTimerRef.current);
+      }
+      window.requestAnimationFrame(() => {
+        setIsHighlighted(true);
+      });
+      highlightTimerRef.current = window.setTimeout(() => {
         setIsHighlighted(false);
-        if (highlightTimerRef.current !== null) {
-          window.clearTimeout(highlightTimerRef.current);
-        }
-        window.requestAnimationFrame(() => {
-          setIsHighlighted(true);
-        });
-        highlightTimerRef.current = window.setTimeout(() => {
-          setIsHighlighted(false);
-          highlightTimerRef.current = null;
-        }, 2200);
-      };
+        highlightTimerRef.current = null;
+      }, 2200);
+    };
 
     return () => {
       if (highlightTimerRef.current !== null) {
@@ -78,8 +136,23 @@ export function BroadcastOutputShell() {
     };
   }, []);
 
-  const handleMouseDown = useCallback(
-    (event: React.MouseEvent<HTMLDivElement>) => {
+  const handleMouseDown = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
+    if (event.button !== 0) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    void getCurrentWindow()
+      .startDragging()
+      .catch(() => {
+        // Ignore drag failures outside Tauri.
+      });
+  }, []);
+
+  const handleResizeMouseDown = useCallback(
+    (direction: ResizeDirection, event: React.MouseEvent<HTMLButtonElement>) => {
       if (event.button !== 0) {
         return;
       }
@@ -88,9 +161,9 @@ export function BroadcastOutputShell() {
       event.stopPropagation();
 
       void getCurrentWindow()
-        .startDragging()
+        .startResizeDragging(direction)
         .catch(() => {
-          // Ignore drag failures outside Tauri.
+          // Ignore resize drag failures outside Tauri.
         });
     },
     [],
@@ -98,11 +171,24 @@ export function BroadcastOutputShell() {
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-transparent">
-      <div
+      <button
+        type="button"
+        tabIndex={-1}
+        aria-label="Move output window"
         data-tauri-drag-region
-        className="fixed inset-0 z-10 cursor-move bg-transparent"
+        className="fixed inset-0 z-10 cursor-move appearance-none border-0 bg-transparent p-0"
         onMouseDown={handleMouseDown}
       />
+      {RESIZE_HANDLES.map((handle) => (
+        <button
+          type="button"
+          key={handle.direction}
+          tabIndex={-1}
+          aria-label={handle.ariaLabel}
+          className={`pointer-events-auto absolute z-30 appearance-none border-0 bg-transparent p-0 ${handle.className} ${handle.cursorClassName}`}
+          onMouseDown={(event) => handleResizeMouseDown(handle.direction, event)}
+        />
+      ))}
       {isHighlighted ? (
         <div className="pointer-events-none absolute inset-0 z-20 overflow-hidden">
           <div
